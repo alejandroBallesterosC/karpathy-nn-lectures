@@ -62,9 +62,9 @@ else
     exit 1
 fi
 
-# Clean up auxiliary files in latex directory (but keep logs for debugging)
+# Clean up auxiliary files and main.pdf in latex directory (PDF is already copied to output directory)
 cd "$INPUT_DIR"
-rm -f *.aux *.log *.out *.toc
+rm -f *.aux *.log *.out *.toc main.pdf
 cd ..
 
 echo ""
