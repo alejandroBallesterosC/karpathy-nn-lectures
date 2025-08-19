@@ -1,0 +1,429 @@
+% ====================================================================
+% LECTURE 2: Building Makemore - Language Modeling with Bigrams
+% ====================================================================
+
+\section{Lecture 2: The Spelled-Out Intro to Language Modeling (Makemore)}
+
+\begin{abstract}
+Welcome to these comprehensive lecture notes on building `makemore`, a project designed to illustrate the fundamentals of language modeling. Just as `micrograd` was built step-by-step to demystify automatic differentiation, `makemore` will be constructed slowly and thoroughly to explain character-level language models, all the way up to the architecture of modern transformers like GPT-2, at the character level.
+\end{abstract}
+
+\subsection{Introduction to Makemore}
+`Makemore` is a system that, as its name suggests, "makes more" of the type of data it is trained on. For instance, if provided with a dataset of names, it learns to generate new sequences that sound like names but are unique. The primary dataset used for demonstration is `names.txt`, which contains approximately 32,000 names collected from a government website. After training, `makemore` can generate unique names such as "Dontel," "Irot," or "Zhendi," which sound plausible but are not real names from the dataset.
+
+\subsubsection{Character-Level Language Models}
+At its core, `makemore` operates as a \textbf{character-level language model}. This means it processes each line in the dataset (e.g., a name) as a sequence of individual characters. The model's primary task is to learn the statistical relationships between characters to predict the next character in a sequence. This foundational understanding will then be extended to word-level models for document generation, and eventually to image and image-text networks like DALL-E and Stable Diffusion.
+
+\subsection{Building a Bigram Language Model: The Statistical Approach}
+We begin our journey by implementing a very simple character-level language model: the \textbf{bigram language model}. In a bigram model, the prediction of the next character is based solely on the immediately preceding character, ignoring any information further back in the sequence. This is a simple yet effective starting point to grasp the core concepts.
+
+\subsubsection{Data Loading and Preparation}
+The first step is to load the `names.txt` dataset.
+
+\begin{lstlisting}[language=Python, caption=Loading and preparing the dataset]
+import torch # We'll use PyTorch later, but good to import early.
+
+# Load the dataset
+words = open('names.txt', 'r').read().splitlines()
+
+# Display basic statistics
+print(f"Total words: {len(words)}") # Expected: ~32,000
+print(f"Shortest word: {min(len(w) for w in words)}") # Expected: 2
+print(f"Longest word: {max(len(w) for w in words)}") # Expected: 15
+print(f"First 10 words: {words[:10]}")
+\end{lstlisting}
+
+\subsubsection{Identifying Bigrams and Special Tokens}
+Each word, like "isabella," implicitly contains several bigram examples. For instance:
+\begin{itemize}
+    \item 'i' is likely to come first.
+    \item 's' is likely to follow 'i'.
+    \item 'a' is likely to follow 'is'.
+    \item ...and so on.
+    \item A special piece of information is that after "isabella," the word is likely to end.
+\end{itemize}
+
+To capture these start and end conditions, we introduce a special token, `.` (dot), to represent both the start and end of a word. This simplified approach uses a single special token instead of separate start/end tokens, which is more pleasing and efficient.
+
+For a word like "emma", the bigrams would be: `(.e)`, `(e,m)`, `(m,m)`, `(m,a)`, `(a,.)`.
+
+\begin{lstlisting}[language=Python, caption=Extracting Bigrams from a word with special tokens]
+# Example for a single word
+word = "emma"
+chars = ['.'] + list(word) + ['.'] # Add start/end tokens
+for ch1, ch2 in zip(chars, chars[1:]):
+    print(ch1, ch2)
+\end{lstlisting}
+
+\subsubsection{Counting Bigram Frequencies}
+The simplest way to learn the statistics of which characters follow others is by counting their occurrences in the dataset. Initially, we can use a Python dictionary to store these counts, mapping each bigram (as a tuple of two characters) to its frequency.
+
+\begin{lstlisting}[language=Python, caption=Counting Bigram Frequencies with a Dictionary]
+b = {} # Our dictionary for counts
+for w in words:
+    chars = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chars, chars[1:]):
+        bigram = (ch1, ch2)
+        b[bigram] = b.get(bigram, 0) + 1 # Increment count, default to 0 if new
+
+# Sort and display most common bigrams
+sorted_b = sorted(b.items(), key=lambda kv: kv[1], reverse=True)
+print(f"Top 10 most common bigrams: {sorted_b[:10]}")
+# Example: (('n', '.'), 7000) means 'n' is followed by end-token 7000 times
+# Example: (('a', 'n'), 6000) means 'a' is followed by 'n' 6000 times
+\end{lstlisting}
+
+\subsubsection{Transition to a PyTorch Tensor for Counts}
+While a dictionary works, it is significantly more convenient and efficient to store these counts in a two-dimensional array, specifically a PyTorch tensor. The rows will represent the first character of a bigram, and the columns will represent the second character. Each entry `N[row, col]` will indicate how often `col` follows `row`.
+
+First, we need a mapping from characters to integers (s2i) and vice-versa (i2s). We will place the special `.` token at index 0, and subsequent letters (a-z) will be mapped to indices 1-26.
+
+\begin{lstlisting}[language=Python, caption=Character-to-Integer Mapping]
+# Create a list of all unique characters, sorted, and include the special '.' token
+chars = sorted(list(set(''.join(words))))
+s2i = {s:i+1 for i,s in enumerate(chars)} # Map a-z to 1-26
+s2i['.'] = 0 # Map '.' to 0
+i2s = {i:s for s,i in s2i.items()} # Reverse mapping
+
+print(f"Character to index mapping (s2i): {s2i}")
+print(f"Index to character mapping (i2s): {i2s}")
+\end{lstlisting}
+
+Now, we can populate our 2D PyTorch tensor:
+
+\begin{lstlisting}[language=Python, caption=Populating the Count Matrix N]
+# Create a 27x27 tensor of zeros (26 letters + 1 special char)
+N = torch.zeros((27, 27), dtype=torch.int32) # Use int32 for counts
+
+for w in words:
+    chars = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chars, chars[1:]):
+        ix1 = s2i[ch1]
+        ix2 = s2i[ch2]
+        N[ix1, ix2] += 1 # Increment count in the tensor
+
+# Visualize a small part of the N matrix (e.g., first few rows/cols)
+print("Shape of N:", N.shape)
+print("N[0, :] (counts for characters following '.'):", N[0, :]) # First row shows start probabilities
+\end{lstlisting}
+
+The `N` matrix visually represents the statistical structure, showing how often certain characters follow others. The row at index 0 (for `.`) indicates the counts for the first letters of names, and the column at index 0 (for `.`) indicates counts for letters preceding the end of a name.
+
+\subsubsection{Converting Counts to Probabilities}
+To use the bigram model for prediction, we need to convert the raw counts in `N` into probabilities. This is done by normalizing each row of the `N` matrix such that the sum of probabilities in each row equals 1.
+
+\begin{lstlisting}[language=Python, caption=Converting Counts to Probabilities (P)]
+# Convert N to float and normalize each row
+P = (N+1).float() # Add 1 for smoothing (explained later) and convert to float
+P /= P.sum(1, keepdim=True) # Divide each row by its sum to get probabilities
+
+# Check normalization for the first row (should sum to 1)
+print(f"Sum of probabilities in first row P: {P[0].sum()}")
+\end{lstlisting}
+
+\textbf{Broadcasting Semantics Note}: When performing operations like `P /= P.sum(1, keepdim=True)`, PyTorch applies "broadcasting". `P` is 27x27, and `P.sum(1, keepdim=True)` results in a 27x1 column vector. PyTorch automatically stretches this 27x1 vector across the columns of `P` (replicating it 27 times) to enable element-wise division, effectively normalizing each row independently. It is crucial to use `keepdim=True` to maintain the dimension for correct broadcasting and avoid subtle bugs where operations might occur in an unintended direction.
+
+\subsubsection{Sampling from the Bigram Model}
+With the probability matrix `P`, we can now generate new sequences. The process is iterative:
+1. Start with the special `.` token (index 0).
+2. Look at the row in `P` corresponding to the current character.
+3. Sample the next character based on the probabilities in that row using `torch.multinomial`.
+4. Append the sampled character to the generated sequence.
+5. If the sampled character is the `.` token, the word ends; otherwise, repeat from step 2.
+
+\begin{lstlisting}[language=Python, caption=Sampling from the Bigram Model]
+g = torch.Generator().manual_seed(2147483647) # For reproducibility
+
+for _ in range(10): # Generate 10 names
+    out = []
+    ix = 0 # Start with '.' token
+
+    while True:
+        p = P[ix] # Get the probability distribution for the current character
+        ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item() # Sample next char
+        if ix == 0: # If we sampled '.', it's the end of the word
+            break
+        out.append(i2s[ix]) # Add character to the output list
+    print(''.join(out)) # Join characters to form the name
+\end{lstlisting}
+
+The generated names may seem "terrible" (e.g., "h", "yanu", "o'reilly"). This is because the bigram model is very simple; it only considers the immediate preceding character and has no long-term memory or understanding of name structure beyond two-character sequences.
+
+\subsection{Evaluating Model Quality: The Loss Function}
+To quantify how "good" our model is, we need a single number that summarizes its quality. This is typically done using a \textbf{loss function}, which we aim to minimize.
+
+\subsubsection{Likelihood and Log-Likelihood}
+For a language model, the quality is often measured by its \textbf{likelihood} of generating the observed training data. This is calculated as the product of the probabilities that the model assigns to each bigram in the training set. A higher likelihood indicates a better model.
+
+However, multiplying many probabilities (which are between 0 and 1) results in extremely small, unwieldy numbers. To overcome this, we use the \textbf{log-likelihood}, which is the sum of the logarithms of the individual probabilities.
+
+Mathematically, if $L = p_1 \times p_2 \times \dots \times p_n$ (likelihood), then $\log(L) = \log(p_1) + \log(p_2) + \dots + \log(p_n)$ (log-likelihood).
+
+The logarithm is a monotonic transformation, meaning maximizing the likelihood is equivalent to maximizing the log-likelihood. Logarithms are also helpful because probabilities near 1 yield log probabilities near 0, while probabilities near 0 yield large negative log probabilities.
+
+\subsubsection{Negative Log-Likelihood (NLL) as Loss}
+For optimization, we prefer a loss function where "lower is better". Therefore, we transform the log-likelihood into the \textbf{negative log-likelihood (NLL)} by simply taking its negative value.
+
+The lowest possible NLL is 0 (when all probabilities assigned by the model to the correct next characters are 1), and it grows positive as the model's predictions worsen.
+
+For convenience and comparison, we often normalize this sum by the total number of bigrams, resulting in the \textbf{average negative log-likelihood}.
+
+\begin{lstlisting}[language=Python, caption=Calculating Average Negative Log-Likelihood Loss]
+log_likelihood = 0.0
+n = 0 # Count of bigrams
+
+for w in words:
+    chars = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chars, chars[1:]):
+        ix1 = s2i[ch1]
+        ix2 = s2i[ch2]
+        prob = P[ix1, ix2] # Probability model assigns to this bigram
+        logprob = torch.log(prob) # Log of that probability
+        log_likelihood += logprob # Sum log probabilities
+        n += 1 # Count bigram
+
+# Average Negative Log-Likelihood
+nll = -log_likelihood
+average_nll = nll / n
+print(f"Total bigrams: {n}")
+print(f"Negative Log Likelihood: {nll:.4f}")
+print(f"Average Negative Log Likelihood (Loss): {average_nll:.4f}") # Expected: ~2.45 after smoothing
+\end{lstlisting}
+
+The goal of training is to minimize this average NLL loss.
+
+\subsubsection{Model Smoothing}
+A significant problem arises if the model assigns a zero probability to a bigram that actually appears in the dataset. This causes the log-probability to become negative infinity and the NLL loss to become positive infinity, making optimization impossible. This happens when a specific character sequence (e.g., 'jq' in "andrej") never occurred in the training data, so its count is 0.
+
+To fix this, we apply \textbf{model smoothing}, specifically "add-1 smoothing" (also known as Laplace smoothing). This involves adding a small "fake count" (e.g., 1) to every bigram count before normalization. This ensures that no bigram ever has a zero count, thus preventing zero probabilities and infinite loss.
+
+\begin{lstlisting}[language=Python, caption=Model Smoothing by adding 1 to all counts]
+# Original P calculation: P = N.float() / N.sum(1, keepdim=True)
+# With smoothing, N is incremented by 1 before normalization:
+P = (N + 1).float() # Add 1 to all counts
+P /= P.sum(1, keepdim=True) # Normalize as before
+\end{lstlisting}
+
+Adding more to the counts (e.g., 5, 10, or more) results in a "smoother" or more uniform probability distribution, as it biases the model towards more uniform predictions. Conversely, adding less leads to a more "peaked" distribution, closely reflecting the observed frequencies.
+
+\subsection{Building a Bigram Language Model: The Neural Network Approach}
+Now, we shift our perspective from explicit counting to using a neural network to learn these bigram probabilities. The goal is to arrive at a very similar model but using the powerful framework of gradient-based optimization.
+
+\subsubsection{Neural Network Architecture}
+Our initial neural network is the simplest possible: a single \textbf{linear layer}. It takes a single character as input and outputs a probability distribution over the 27 possible next characters.
+\begin{itemize}
+    \item \textbf{Input}: A single character (represented as an integer index).
+    \item \textbf{Neural Network (Parameters $W$)}: A linear transformation.
+    \item \textbf{Output}: 27 numbers, which will be transformed into a probability distribution for the next character.
+\end{itemize}
+
+The optimization process will involve tuning the parameters (weights $W$) of this neural network to minimize the negative log-likelihood loss, ensuring it assigns high probabilities to the correct next characters in the training data.
+
+\subsubsection{Preparing Data for the Neural Network}
+The training data for the neural network consists of pairs of (input character, target character), where both are integer indices.
+
+\begin{lstlisting}[language=Python, caption=Creating Input (xs) and Target (ys) Tensors]
+xs, ys = [], [] # Lists to store input and target indices
+
+for w in words:
+    chars = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chars, chars[1:]):
+        ix1 = s2i[ch1]
+        ix2 = s2i[ch2]
+        xs.append(ix1) # Input character index
+        ys.append(ix2) # Target (label) character index
+
+xs = torch.tensor(xs) # Convert to PyTorch tensor
+ys = torch.tensor(ys) # Convert to PyTorch tensor
+
+num_examples = xs.nelement() # Total number of bigram examples
+print(f"Number of examples: {num_examples}")
+print(f"Shape of inputs (xs): {xs.shape}, dtype: {xs.dtype}")
+print(f"Shape of targets (ys): {ys.shape}, dtype: {ys.dtype}")
+\end{lstlisting}
+
+\subsubsection{Input Encoding: One-Hot Vectors}
+Neural networks don't typically take raw integer indices as input for their weights to act multiplicatively. Instead, integer inputs are commonly encoded using \textbf{one-hot encoding}. A one-hot encoded vector is a vector of zeros except for a single dimension (corresponding to the integer's value), which is set to one.
+
+\begin{lstlisting}[language=Python, caption=One-Hot Encoding Inputs]
+import torch.nn.functional as F # Common import for functional operations
+
+# Encode xs into one-hot vectors. num_classes is 27 (26 letters + '.')
+# Ensure dtype is float32 for neural network operations
+x_encoded = F.one_hot(xs, num_classes=27).float()
+print(f"Shape of x_encoded: {x_encoded.shape}") # Expected: (num_examples, 27)
+print(f"Dtype of x_encoded: {x_encoded.dtype}") # Should be torch.float32
+\end{lstlisting}
+
+\subsubsection{The Forward Pass}
+The forward pass describes how the neural network transforms its inputs into outputs (probabilities).
+
+1.  \textbf{Initialize Weights ($W$)}: The single linear layer has weights $W$. Since there are 27 possible input characters and 27 possible output characters (probabilities for the next character), the weight matrix `W` will be of size 27x27. It is initialized with random numbers from a normal distribution.
+
+    \begin{lstlisting}[language=Python, caption=Initializing Weights]
+    g = torch.Generator().manual_seed(2147483647) # For reproducibility
+    W = torch.randn((27, 27), generator=g, requires_grad=True) # 27x27 weights
+    print(f"Shape of W: {W.shape}")
+    \end{lstlisting}
+
+2.  \textbf{Calculate Logits}: The core of the linear layer is a matrix multiplication: `x_encoded @ W`. This operation efficiently computes the `Wx` product for all input examples and all neurons in parallel. The result, called \textbf{logits}, represents "log counts" or unnormalized scores for each possible next character.
+
+    \begin{lstlisting}[language=Python, caption=Calculating Logits]
+    # x_encoded is (num_examples, 27), W is (27, 27)
+    # The result 'logits' will be (num_examples, 27)
+    logits = x_encoded @ W # Matrix multiplication
+    print(f"Shape of logits: {logits.shape}")
+    \end{lstlisting}
+
+    Crucially, because `x_encoded` is one-hot, `x_encoded @ W` effectively "plucks out" the row of `W` corresponding to the active (1) index in the one-hot input vector. This means `logits[i]` (for the i-th example) will be identical to `W[ix1]`, where `ix1` is the integer index of the input character. This is analogous to how we looked up rows in the `N` matrix in the statistical approach.
+
+3.  \textbf{Convert Logits to Probabilities (Softmax)}: Logits can be any real number (positive or negative). To transform them into a valid probability distribution (positive numbers that sum to 1), we use the \textbf{softmax} function. Softmax involves two steps:
+    *   \textbf{Exponentiation}: $\text{counts} = e^{\text{logits}}$. This converts log-counts into positive "fake counts".
+    *   \textbf{Normalization}: $\text{probabilities} = \frac{\text{counts}}{\sum \text{counts}}$. Each row of counts is normalized to sum to 1, producing probabilities.
+
+    \begin{lstlisting}[language=Python, caption=Softmax Transformation]
+    # Exponentiate logits to get "counts" (positive values)
+    counts = logits.exp() # Element-wise exponentiation
+
+    # Normalize counts to get probabilities (each row sums to 1)
+    probs = counts / counts.sum(1, keepdim=True) # Same broadcasting as before
+
+    print(f"Shape of probabilities (probs): {probs.shape}") # (num_examples, 27)
+    print(f"Sum of first row of probs: {probs[0].sum()}") # Should be ~1
+    \end{lstlisting}
+
+    This entire sequence (`logits -> counts -> probs`) is what is commonly referred to as the \textbf{softmax layer} in neural networks. It ensures the neural network's outputs are interpretable as probability distributions. All these operations are differentiable, which is crucial for backpropagation.
+
+\subsubsection{Loss Calculation for Neural Networks}
+The loss function for the neural network is still the average negative log-likelihood.
+We need to "pluck out" the probability that the model assigned to the *correct* next character (the `ys` target) for each input example.
+
+\begin{lstlisting}[language=Python, caption=Calculating Neural Network Loss]
+# Select the probabilities corresponding to the correct target characters
+# torch.arange(num_examples) creates indices for each row: 0, 1, 2, ...
+# ys contains the column index (target character) for each row
+correct_probs = probs[torch.arange(num_examples), ys] # Shape: (num_examples,)
+
+# Calculate log probabilities and then the negative mean (average NLL)
+loss = -correct_probs.log().mean()
+print(f"Neural Network Loss (average NLL): {loss.item():.4f}") # .item() extracts scalar from tensor
+\end{lstlisting}
+
+A high loss value (e.g., 3.76 initially) indicates that the randomly initialized network is assigning low probabilities to the correct next characters.
+
+\subsubsection{The Backward Pass and Optimization}
+The core idea of training a neural network is to iteratively adjust its parameters (the weights $W$) to minimize the loss. This is achieved using \textbf{gradient-based optimization}, specifically \textbf{gradient descent}.
+
+1.  \textbf{Zero Gradients}: Before computing new gradients, any accumulated gradients from previous iterations must be reset to zero.
+
+    \begin{lstlisting}[language=Python, caption=Zeroing Gradients]
+    W.grad = None # More efficient than W.grad.zero_() in PyTorch
+    \end{lstlisting}
+
+2.  \textbf{Backpropagation}: PyTorch automatically builds a computational graph during the forward pass, tracking all operations and their dependencies. Calling `loss.backward()` initiates backpropagation, computing the gradients of the `loss` with respect to all tensors that `requires_grad=True` (in our case, `W`). These gradients are then stored in the `.grad` attribute of `W`.
+
+    \begin{lstlisting}[language=Python, caption=Backpropagation]
+    loss.backward() # Computes gradients of loss wrt W
+    print(f"Shape of W.grad: {W.grad.shape}")
+    \end{lstlisting}
+
+    The `W.grad` tensor contains information on how each weight in `W` influences the `loss`. A positive gradient means increasing that weight would increase the loss, while a negative gradient means increasing that weight would decrease the loss.
+
+3.  \textbf{Parameter Update}: We update the weights by nudging them in the opposite direction of their gradients. This is the core of gradient descent. The `learning_rate` (e.g., 0.1 or 50) controls the size of these nudges. We use `W.data` to perform the update directly on the underlying data, bypassing the gradient tracking mechanism for this step.
+
+    \begin{lstlisting}[language=Python, caption=Updating Weights]
+    learning_rate = 50.0 # Example learning rate
+    W.data += -learning_rate * W.grad # Nudge weights in direction of decreasing loss
+    \end{lstlisting}
+
+This process of forward pass, loss calculation, backward pass, and parameter update is repeated for many iterations (epochs).
+
+\begin{lstlisting}[language=Python, caption=Training Loop (Gradient Descent)]
+g = torch.Generator().manual_seed(2147483647) # For reproducibility
+W = torch.randn((27, 27), generator=g, requires_grad=True) # Initialize W
+
+learning_rate = 50.0
+num_iterations = 100 # How many steps of gradient descent
+
+for k in range(num_iterations):
+    # Forward pass:
+    x_encoded = F.one_hot(xs, num_classes=27).float()
+    logits = x_encoded @ W
+    counts = logits.exp()
+    probs = counts / counts.sum(1, keepdim=True)
+    correct_probs = probs[torch.arange(num_examples), ys]
+    loss = -correct_probs.log().mean()
+
+    # Backward pass:
+    W.grad = None # Zero gradients
+    loss.backward() # Compute gradients
+
+    # Update weights:
+    W.data += -learning_rate * W.grad
+
+    if k % 10 == 0:
+        print(f"Iteration {k}: Loss = {loss.item():.4f}")
+
+print(f"Final Neural Network Loss: {loss.item():.4f}") # Should be similar to ~2.45
+\end{lstlisting}
+
+After sufficient training iterations, the neural network's loss converges to a value very similar to what was achieved with the explicit counting method (around 2.45-2.47). This is because for a bigram model, the direct counting method *is* the optimal solution for minimizing this loss function, and gradient descent finds that same optimum. The `W` matrix, after optimization, becomes essentially the `log(N+1)` matrix from the statistical approach, demonstrating the equivalence.
+
+\subsubsection{Model Smoothing (Regularization in Neural Nets)}
+In the neural network framework, the equivalent of adding "fake counts" for model smoothing is achieved through \textbf{regularization}. Specifically, adding a term to the loss function that penalizes large or non-zero weights (e.g., L2 regularization, which adds `W.square().mean()` to the loss).
+
+If `W` has all its entries equal to zero, then `logits` will be all zeros, `counts` will be all ones, and `probs` will be uniform (each character having equal probability). By adding a regularization loss that pushes `W` towards zero, we incentivize smoother (more uniform) probability distributions.
+
+\begin{lstlisting}[language=Python, caption=L2 Regularization for Smoothing]
+# Add a regularization term to the loss function
+# lambda_reg controls the strength of regularization
+lambda_reg = 0.01 # Example regularization strength
+# Original loss: -correct_probs.log().mean()
+loss = -correct_probs.log().mean() + lambda_reg * (W**2).mean()
+\end{lstlisting}
+
+This regularization term acts like a "spring force" pulling the weights towards zero, balancing the data-driven loss that tries to match the observed probabilities. A stronger regularization `lambda_reg` leads to a smoother model, analogous to adding more fake counts.
+
+\subsubsection{Sampling from the Neural Network Model}
+Once the neural network is trained, sampling new names works exactly as with the statistical bigram model. The difference is that the probability distribution `p` for the next character is now computed by passing the current character through the trained neural network (forward pass), rather than looking it up in the pre-computed `P` table.
+
+\begin{lstlisting}[language=Python, caption=Sampling from the Trained Neural Network]
+g = torch.Generator().manual_seed(2147483647 + 10) # Different seed for different samples
+
+for _ in range(10): # Generate 10 names
+    out = []
+    ix = 0 # Start with '.' token
+    while True:
+        # Forward pass through the neural net to get probabilities
+        x_encoded = F.one_hot(torch.tensor([ix]), num_classes=27).float() # Input single character
+        logits = x_encoded @ W # Logits for current char
+        counts = logits.exp() # Counts
+        p = counts / counts.sum(1, keepdim=True) # Probabilities
+
+        ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item() # Sample
+        if ix == 0:
+            break
+        out.append(i2s[ix])
+    print(''.join(out))
+\end{lstlisting}
+
+Since the trained neural network effectively learned the same underlying probability distribution as the counting method, it produces identical-looking samples and achieves the same loss.
+
+\subsection{Conclusion and Future Extensions}
+We have built and explored a bigram character-level language model using two distinct approaches:
+\begin{enumerate}
+    \item \textbf{Statistical Counting}: Directly counting bigram frequencies and normalizing them to form a probability distribution matrix.
+    \item \textbf{Neural Network (Gradient-Based Optimization)}: Using a simple linear layer, one-hot encoding, and softmax to produce probabilities, then optimizing weights with gradient descent to minimize negative log-likelihood loss.
+\end{enumerate}
+
+Both methods lead to the same model and results for the bigram case.
+
+The true power of the neural network approach lies in its scalability and flexibility. While the counting method is simple for bigrams, it becomes intractable for longer sequences (e.g., if we consider the last 10 characters to predict the next), as the number of possible combinations explodes, making a lookup table infeasible.
+
+In future developments, this framework will be expanded:
+\begin{itemize}
+    \item Taking more previous characters as input (not just one).
+    \item Using increasingly complex neural network architectures, moving beyond a single linear layer to multi-layer perceptrons, recurrent neural networks, and ultimately, modern \textbf{transformers} (like GPT-2's core mechanism).
+\end{itemize}
+
+Despite this increasing complexity, the fundamental principles of the forward pass (producing logits, softmax to probabilities), loss calculation (negative log-likelihood), and optimization (gradient descent) will remain consistent.

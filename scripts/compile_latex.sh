@@ -36,11 +36,11 @@ cd "$INPUT_DIR"
 
 echo "📖 Compiling: $MAIN_FILE (pass 1)..."
 # First pass: Run pdflatex to compile the main file
-pdflatex -interaction=nonstopmode "$MAIN_FILE" > "../compile_log_pass1.log" 2>&1
+pdflatex -interaction=nonstopmode "$MAIN_FILE" > "../compile_log_pass1.log" 2>&1 || true
 
 echo "📖 Compiling: $MAIN_FILE (pass 2)..."
 # Second pass: Run pdflatex again for cross-references, TOC, etc.
-pdflatex -interaction=nonstopmode "$MAIN_FILE" > "../compile_log_pass2.log" 2>&1
+pdflatex -interaction=nonstopmode "$MAIN_FILE" > "../compile_log_pass2.log" 2>&1 || true
 
 # Go back to project root
 cd ..

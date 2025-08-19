@@ -1,0 +1,459 @@
+% ====================================================================
+% LECTURE 3: Building Makemore Part 2 - Multi-Layer Perceptron (MLP)
+% ====================================================================
+
+\section{Lecture 3: Building Makemore Part 2 - Multi-Layer Perceptron (MLP)}
+
+\begin{abstract}
+Welcome to the second installment of our ``makemore'' series! In this lecture, we transition from simpler models to a more sophisticated neural network approach to improve our character-level language modeling. Our goal is to generate more name-like sequences by considering greater context when predicting the next character.
+\end{abstract}
+
+\subsection{Limitations of the Bigram Model and the Need for MLPs}
+
+In the previous lecture, we implemented a bigram language model, which predicted the next character based solely on the immediately preceding character. This was done using both counts and a simple neural network with a single linear layer.
+
+While approachable, the bigram model suffered from a significant limitation: it only considered one character of context. This severely limited its predictive power, leading to generated names that didn't sound very realistic.
+
+The core problem with extending this count-based approach to more context (e.g., trigrams or longer) is that the size of the required lookup table (or matrix of counts) grows exponentially with the context length.
+\begin{itemize}
+    \item 1 character context: 27 possibilities.
+    \item 2 characters context: $27 \times 27 = 729$ possibilities.
+    \item 3 characters context: $27 \times 27 \times 27 \approx 20,000$ possibilities.
+\end{itemize}
+
+This exponential growth quickly leads to an impractically large matrix with too few counts for each possibility, causing the model to ``blow up'' and perform poorly.
+
+To overcome this, we adopt a Multi-Layer Perceptron (MLP) model, inspired by the influential paper by Bengio et al. (2003).
+
+\subsection{The Bengio et al. (2003) Modeling Approach}
+
+The Bengio et al. (2003) paper was highly influential in demonstrating the use of neural networks for predicting the next token in a sequence, specifically focusing on a word-level language model with a vocabulary of 17,000 words. While their paper focuses on words, we apply the same core modeling approach to characters.
+
+\subsubsection{Core Idea: Word/Character Embeddings}
+The central innovation is associating a low-dimensional "feature vector" (an embedding) to each word or character in the vocabulary.
+\begin{itemize}
+    \item For 17,000 words, they embedded each into a 30-dimensional space, creating 17,000 vectors in this space.
+    \item Initially, these embeddings are randomly initialized and spread out.
+    \item During neural network training, these embedding vectors are tuned using backpropagation, causing them to move around in the space.
+    \item The intuition is that words with similar meanings (or synonyms) will end up in similar parts of the embedding space, while unrelated words will be far apart.
+\end{itemize}
+
+\subsubsection{Generalization through Embeddings}
+This embedding approach facilitates generalization to novel scenarios.
+\begin{itemize}
+    \item \textbf{Example:} If the phrase ``a dog was running in a [blank]'' has never been seen, but ``the dog was running in a [blank]'' has, the network can still make a good prediction.
+    \item This is because the embeddings for ``a'' and ``the'' might be learned to be close to each other, allowing knowledge to transfer.
+    \item Similarly, if ``cats'' and ``dogs'' co-occur in similar contexts, their embeddings will be close, enabling the model to generalize even if it hasn't seen the exact phrase with one or the other.
+\end{itemize}
+
+\subsubsection{Neural Network Architecture}
+The core modeling approach involves a multi-layer neural network to predict the next word/character given previous ones, trained by maximizing the log likelihood of the training data.
+
+The network diagram for predicting the fourth word given three previous words is as follows:
+\begin{enumerate}
+    \item \textbf{Input Layer (Embedding Lookup Table C):}
+    \begin{itemize}
+        \item Each of the three previous words (or characters in our case) is represented by an integer index from the vocabulary (e.g., 0 to 16999 for 17,000 words).
+        \item These indices are fed into a shared ``lookup table'' (matrix C).
+        \item Matrix C has dimensions `Vocabulary Size x Embedding Dimension` (e.g., 17,000 x 30).
+        \item Each integer index "plucks out" a corresponding row from C, converting the index into its dense embedding vector (e.g., a 30-dimensional vector for each word).
+        \item If we have three previous words, and each word has a 30-dimensional embedding, the combined input to the next layer is 90 neurons ($3 \times 30$).
+    \end{itemize}
+
+    \item \textbf{Hidden Layer:}
+    \begin{itemize}
+        \item This is a fully connected layer.
+        \item The size of this layer (number of neurons) is a `hyperparameter` (a design choice, e.g., 100 neurons).
+        \item It takes the concatenated embeddings from the input layer (e.g., 90 numbers) and transforms them.
+        \item A `tanh` non-linearity is applied to the output of this layer.
+    \end{itemize}
+
+    \item \textbf{Output Layer:}
+    \begin{itemize}
+        \item This is also a fully connected layer.
+        \item It has `Vocabulary Size` neurons (e.g., 17,000 for words, or 27 for characters).
+        \item This layer is typically the most computationally expensive due to the large number of parameters when dealing with large vocabularies.
+    \end{itemize}
+
+    \item \textbf{Softmax Layer:}
+    \begin{itemize}
+        \item The outputs of the final layer (``logits'') are passed through a `softmax` function.
+        \item Softmax exponentiates each logit and normalizes them to sum to 1, producing a probability distribution for the next word/character in the sequence.
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Training the Neural Network}
+\begin{itemize}
+    \item During training, the actual next word/character (the ``label'') is known.
+    \item This label's probability (as output by the network) is plucked from the softmax distribution.
+    \item The training objective is to maximize the log likelihood of the correct labels.
+    \item All network parameters (weights and biases of hidden and output layers, and the embedding lookup table C) are optimized using `backpropagation`.
+\end{itemize}
+
+\subsection{Character-Level MLP Implementation in PyTorch}
+
+We now transition to implementing this model for character-level language modeling using PyTorch, building on the ``makemore'' project.
+
+\subsubsection{Setup and Data Preparation}
+We begin by importing necessary libraries, loading the name dataset, and creating character-to-integer mappings.
+
+\begin{lstlisting}[caption=Initial Setup]
+import torch
+import torch.nn.functional as F # Convention: F for functional
+import matplotlib.pyplot as plt # for plotting
+
+# Load names from file
+words = open('names.txt', 'r').read().splitlines()
+
+# Build vocabulary and mappings
+chars = sorted(list(set(''.join(words))))
+stoi = {s:i+1 for i,s in enumerate(chars)}
+stoi['.'] = 0 # Special token for start/end of sequence
+itos = {i:s for s,i in stoi.items()}
+vocab_size = len(itos) # 27 characters
+\end{lstlisting}
+
+\subsubsection{Dataset Creation}
+We need to compile a dataset of input-label pairs (`x` and `y`) for the neural network. The `block_size` hyperparameter determines the context length (how many previous characters are used to predict the next).
+
+\begin{lstlisting}[caption=Dataset Creation Function]
+# block_size: context length: how many characters do we take to predict the next one?
+block_size = 3 # Taking 3 characters to predict the 4th
+
+def build_dataset(words):
+    X, Y = [], []
+    for w in words:
+        context = [0] * block_size # Start with padded context (0 is '.')
+        for ch in w + '.': # Iterate through word characters + end token
+            ix = stoi[ch] # Get integer index of current character
+            X.append(context) # Add current context to inputs
+            Y.append(ix)      # Add current char's index as label
+            context = context[1:] + [ix] # Slide the window: remove first, append current char
+
+    X = torch.tensor(X)
+    Y = torch.tensor(Y)
+    print(X.shape, Y.shape)
+    return X, Y
+
+# Split the data into training, development (validation), and test sets
+# Training: optimize model parameters
+# Development/Validation: tune hyperparameters (e.g., hidden layer size, embedding size)
+# Test: sparingly evaluate final model performance
+import random
+random.seed(42)
+random.shuffle(words) # Shuffle words before splitting
+
+n1 = int(0.8*len(words)) # 80% for training
+n2 = int(0.9*len(words)) # 10% for dev, 10% for test
+
+Xtr, Ytr = build_dataset(words[:n1])      # Training set
+Xdev, Ydev = build_dataset(words[n1:n2])  # Development/Validation set
+Xte, Yte = build_dataset(words[n2:])      # Test set
+\end{lstlisting}
+
+The `context` array acts as a rolling window, padding with `.` (token 0) at the beginning. For a `block_size` of 3, `X` contains 3 integers, and `Y` contains 1 integer.
+
+\subsubsection{Embedding Lookup Table (C)}
+We define our embedding table `C`. Initially, we might use a small embedding dimension (e.g., 2) for visualization purposes. For our 27 characters, `C` will be `27 x D` (where `D` is the embedding dimension).
+
+\begin{lstlisting}[caption=Embedding Table Initialization]
+emb_dim = 10 # Embedding dimension (e.g., 2 for initial visualization, 10 for better performance)
+C = torch.randn((vocab_size, emb_dim)) # 27 chars, each embedded into emb_dim space
+\end{lstlisting}
+
+\paragraph{Embedding a Single Integer:}
+We can retrieve the embedding for an integer `ix` by direct indexing: `C[ix]`.
+
+\begin{lstlisting}
+print(C[5]) # Retrieves the embedding vector for character index 5
+\end{lstlisting}
+
+\paragraph{Equivalence to One-Hot Encoding and Matrix Multiplication:}
+Conceptually, indexing `C[ix]` is equivalent to creating a one-hot encoded vector for `ix` and then multiplying it by `C`.
+
+\begin{lstlisting}
+# Example of one-hot encoding (for illustration, not practical for indexing)
+# Pytorch requires input to be a tensor, not int
+one_hot_ix = F.one_hot(torch.tensor(5), num_classes=vocab_size).float()
+print(one_hot_ix @ C) # This yields the same result as C[5]
+\end{lstlisting}
+
+However, direct indexing `C[ix]` is significantly faster and more efficient as it avoids creating the large intermediate one-hot vector and performing matrix multiplication.
+
+\paragraph{Embedding Multiple Integers Simultaneously:}
+PyTorch's indexing is flexible and allows embedding an entire batch of inputs (`X`) simultaneously.
+
+\begin{lstlisting}[caption=Batch Embedding]
+# Xtr has shape (num_examples, block_size) e.g., (228146, 3)
+embeddings = C[Xtr] # Retrieves embeddings for all integers in Xtr
+# Resulting shape: (num_examples, block_size, emb_dim) e.g., (228146, 3, 10)
+print(embeddings.shape)
+\end{lstlisting}
+
+\subsubsection{Hidden Layer}
+The hidden layer performs a linear transformation followed by a `tanh` non-linearity.
+\begin{itemize}
+    \item \textbf{Weights (`W1`):} Dimensions `(block_size * emb_dim) x hidden_layer_size`.
+    \item \textbf{Biases (`b1`):} Dimensions `hidden_layer_size`.
+\end{itemize}
+
+\begin{lstlisting}[caption=Hidden Layer Parameter Initialization]
+hidden_layer_size = 200 # Hyperparameter: number of neurons in the hidden layer
+W1 = torch.randn((block_size * emb_dim, hidden_layer_size))
+b1 = torch.randn(hidden_layer_size)
+\end{lstlisting}
+
+\paragraph{Reshaping Embeddings for Matrix Multiplication:}
+The `embeddings` tensor has a shape like `(batch_size, block_size, emb_dim)`. To perform matrix multiplication with `W1` (which expects a 2D input), we need to concatenate the `block_size` and `emb_dim` dimensions.
+
+\begin{itemize}
+    \item \textbf{Naive Concatenation (`torch.cat`):}
+    One way is to explicitly slice and concatenate: `torch.cat([embeddings[:, 0, :], embeddings[:, 1, :], embeddings[:, 2, :]], dim=1)`.
+    Using `torch.unbind(embeddings, dim=1)` provides a general way to get the slices as a tuple, which can then be concatenated.
+    However, `torch.cat` creates a *new tensor* in memory, making it less efficient.
+
+    \item \textbf{Efficient Reshaping (`.view()`):}
+    The most efficient way in PyTorch is to use the `.view()` method. This operation is extremely efficient because it doesn't copy or change memory; instead, it manipulates internal tensor attributes (like `stride` and `shape`) to interpret the underlying one-dimensional memory storage differently.
+\end{itemize}
+
+\begin{lstlisting}[caption=Efficient Embedding Reshaping with .view()]
+# embeddings.shape: (batch_size, block_size, emb_dim)
+# We want to reshape to (batch_size, block_size * emb_dim)
+input_to_hidden = embeddings.view(-1, block_size * emb_dim)
+# Using -1 lets PyTorch infer the first dimension (batch_size)
+# This achieves the desired "concatenation" logically
+print(input_to_hidden.shape) # e.g., (228146, 30)
+\end{lstlisting}
+
+\paragraph{Forward Pass through Hidden Layer:}
+\begin{lstlisting}[caption=Hidden Layer Computation]
+# Linear transformation: matrix multiplication and bias addition
+h_pre_activation = input_to_hidden @ W1 + b1
+
+# Apply tanh non-linearity
+h = torch.tanh(h_pre_activation)
+print(h.shape) # e.g., (228146, 200)
+\end{lstlisting}
+
+\textbf{Note on Broadcasting:} When `b1` (shape `(hidden_layer_size,)`) is added to `h_pre_activation` (shape `(batch_size, hidden_layer_size)`), PyTorch's broadcasting rules ensure `b1` is effectively expanded to `(1, hidden_layer_size)` and then copied vertically for each row, performing element-wise addition correctly.
+
+\subsubsection{Output Layer and Logits}
+The output layer maps the hidden layer activations to logits for each character in the vocabulary.
+\begin{itemize}
+    \item \textbf{Weights (`W2`):} Dimensions `hidden_layer_size x vocab_size`.
+    \item \textbf{Biases (`b2`):} Dimensions `vocab_size`.
+\end{itemize}
+
+\begin{lstlisting}[caption=Output Layer Parameter Initialization and Logit Calculation]
+W2 = torch.randn((hidden_layer_size, vocab_size))
+b2 = torch.randn(vocab_size)
+
+# Logits calculation
+logits = h @ W2 + b2
+print(logits.shape) # e.g., (228146, 27)
+\end{lstlisting}
+
+\subsubsection{Loss Function}
+The `logits` represent unnormalized scores for each possible next character. To get probabilities, they are typically exponentiated and then normalized (softmax).
+
+\begin{lstlisting}[caption=Manual Probability and NLL Loss Calculation (for illustration)]
+# Manual calculation:
+# counts = logits.exp() # Exponentiate logits to get "fake counts"
+# probs = counts / counts.sum(1, keepdim=True) # Normalize to probabilities
+# print(probs.shape) # (num_examples, vocab_size), each row sums to 1
+
+# # Get probabilities for the correct characters
+# correct_char_probs = probs[range(Xtr.shape[0]), Ytr]
+# # Negative Log Likelihood Loss
+# loss = -correct_char_probs.log().mean()
+# print(loss)
+\end{lstlisting}
+
+\paragraph{Preferring `F.cross_entropy`:}
+While the manual calculation works, PyTorch provides `torch.nn.functional.cross_entropy` (often aliased as `F.cross_entropy`), which is the preferred way to compute this loss.
+
+There are several strong reasons to use `F.cross_entropy`:
+\begin{enumerate}
+    \item \textbf{Efficiency:} It avoids creating large intermediate tensors (like `counts` and `probs`) in memory. PyTorch can optimize these clustered operations using "fused kernels," leading to much faster computation.
+    \item \textbf{Simpler Backward Pass:} The analytical derivative for cross-entropy loss is mathematically simpler than backpropagating through individual `exp`, `sum`, and `log` operations. This leads to a more efficient and robust backward pass implementation.
+    \item \textbf{Numerical Stability:} Cross-entropy is designed to be numerically well-behaved, especially when logits take on extreme values.
+    \begin{itemize}
+        \item When logits are very large positive numbers (e.g., 100), `exp(100)` can lead to floating-point overflow (`inf`) and subsequently Not-a-Number (`NaN`) results.
+        \item `F.cross_entropy` internally handles this by subtracting the maximum logit value from all logits before exponentiation. This shifts the values so the largest logit becomes 0, and others become negative, preventing overflow while mathematically preserving the resulting probabilities.
+    \end{itemize}
+\end{enumerate}
+
+\begin{lstlisting}[caption=Loss Calculation with F.cross_entropy]
+# Using PyTorch's F.cross_entropy (recommended)
+# This function internally performs softmax and then negative log likelihood.
+# It expects raw logits and target indices (Ytr).
+loss = F.cross_entropy(logits, Ytr)
+print(loss)
+\end{lstlisting}
+
+\subsubsection{Training Loop}
+The training process involves an iterative loop of forward pass, backward pass (gradient calculation), and parameter updates.
+
+\begin{lstlisting}[caption=Parameter Collection and Initialization]
+# Collect all parameters that require gradients
+parameters = [C, W1, b1, W2, b2]
+for p in parameters:
+    p.requires_grad = True # Enable gradient computation for these tensors
+
+# Initial number of parameters
+num_parameters = sum(p.nelement() for p in parameters)
+print(f"Total parameters: {num_parameters}") # e.g., 3400 for emb_dim=2, hidden_layer_size=100
+\end{lstlisting}
+
+\paragraph{Mini-Batch Training:}
+To handle large datasets efficiently, we use `mini-batching`. Instead of calculating gradients over the entire dataset (which is slow), we randomly select a small subset (a mini-batch) for each forward and backward pass.
+
+\begin{lstlisting}[caption=Training Loop with Mini-Batching]
+max_steps = 200000 # Number of training iterations
+batch_size = 32    # Number of examples in each mini-batch
+learning_rate = 0.1 # Initial learning rate (will decay)
+
+for i in range(max_steps):
+    # Construct mini-batch
+    # Select random indices for the current mini-batch
+    ix = torch.randint(0, Xtr.shape[0], (batch_size,)) # (batch_size,) tensor of random indices
+
+    # Forward pass on the mini-batch
+    emb = C[Xtr[ix]] # (batch_size, block_size, emb_dim)
+    h = torch.tanh(emb.view(-1, block_size * emb_dim) @ W1 + b1) # (batch_size, hidden_layer_size)
+    logits = h @ W2 + b2 # (batch_size, vocab_size)
+    loss = F.cross_entropy(logits, Ytr[ix]) # Loss for this mini-batch
+
+    # Backward pass: zero gradients, compute new gradients
+    for p in parameters:
+        p.grad = None # Set gradients to zero
+    loss.backward() # Computes gradients for all parameters that require_grad
+
+    # Parameter update
+    for p in parameters:
+        p.data -= learning_rate * p.grad # Nudge parameters in direction of negative gradient
+
+    # Learning rate decay (example)
+    if i == 100000: # After 100,000 steps, reduce LR
+        learning_rate = 0.01
+
+    # Optional: print loss periodically
+    # if i % 10000 == 0:
+    #     print(f"Step {i}: Loss = {loss.item():.4f}")
+\end{lstlisting}
+
+\subsubsection{Evaluating Performance and Hyperparameter Tuning}
+
+\paragraph{Loss on Splits:}
+After training, we evaluate the loss on the entire training set (`Xtr`, `Ytr`) and the development set (`Xdev`, `Ydev`). The test set (`Xte`, `Yte`) is reserved for a single final evaluation after all hyperparameter tuning is complete, to avoid overfitting to the test set.
+
+\begin{lstlisting}[caption=Evaluating Loss on Data Splits]
+@torch.no_grad() # Disable gradient tracking for evaluation
+def evaluate_loss(X, Y, C, W1, b1, W2, b2, block_size):
+    emb = C[X]
+    h = torch.tanh(emb.view(-1, block_size * emb_dim) @ W1 + b1)
+    logits = h @ W2 + b2
+    loss = F.cross_entropy(logits, Y)
+    return loss.item()
+
+train_loss = evaluate_loss(Xtr, Ytr, C, W1, b1, W2, b2, block_size)
+dev_loss = evaluate_loss(Xdev, Ydev, C, W1, b1, W2, b2, block_size)
+print(f"Final training loss: {train_loss:.4f}")
+print(f"Final development loss: {dev_loss:.4f}")
+\end{lstlisting}
+
+\paragraph{Detecting Overfitting and Underfitting:}
+\begin{itemize}
+    \item If `train_loss` $\approx$ `dev_loss`, the model is likely `underfitting`. This means the model is not powerful enough to fully learn the training data, and increasing its capacity (e.g., more neurons, higher embedding dimension) may improve performance on both sets.
+    \item If `train_loss` $<<$ `dev_loss`, the model is `overfitting`. It has memorized the training data too well, losing its ability to generalize to unseen data. This can be addressed by reducing model capacity, increasing regularization, or using more training data.
+\end{itemize}
+
+\paragraph{Hyperparameter Tuning Example: Scaling Model Capacity}
+Initially, we might see `train_loss` and `dev_loss` are similar (e.g., around 2.45), indicating underfitting compared to the bigram model.
+
+\begin{enumerate}
+    \item \textbf{Increasing Hidden Layer Size:} Bumping `hidden_layer_size` (e.g., from 100 to 300 neurons) increases model capacity. This increases the total number of parameters (e.g., from ~3400 to ~10,000).
+
+    \item \textbf{Visualizing 2D Embeddings (Pre-scaling):} Before increasing embedding dimension, we can visualize the 2D embeddings `C` to see what the network has learned.
+    \begin{lstlisting}[caption=Visualizing Character Embeddings (for emb_dim=2)]
+# Requires emb_dim = 2 to visualize
+plt.figure(figsize=(8,8))
+plt.scatter(C[:,0].data, C[:,1].data, s=200) # Plot x,y coordinates from 2D embeddings
+for i in range(C.shape[0]):
+    plt.text(C[i,0].item(), C[i,1].item(), itos[i], ha="center", va="center", color='white')
+plt.grid('minor')
+plt.show()
+\end{lstlisting}
+    \textit{Observation:} The network learns meaningful structure. For example, vowels (a, e, i, o, u) often cluster together, suggesting the network treats them as similar or interchangeable. Special characters like `.` and less common letters like `q` might be outliers, indicating unique embeddings.
+
+    \item \textbf{Increasing Embedding Dimension:} If increasing the hidden layer size doesn't sufficiently improve performance, the `emb_dim` might be a bottleneck. Increasing `emb_dim` (e.g., from 2 to 10) gives the model more expressive power to represent characters. This requires adjusting the input size to the hidden layer (e.g., `block_size * emb_dim` becomes `3 * 10 = 30`).
+\end{enumerate}
+
+Through such tuning, a significantly lower loss can be achieved (e.g., `dev_loss` of 2.17) compared to the bigram model's 2.45 loss.
+
+\paragraph{Learning Rate Determination Strategy:}
+Finding an effective `learning_rate` is crucial. A common strategy involves a "learning rate finder":
+\begin{enumerate}
+    \item Initialize parameters.
+    \item Sweep `learning_rate` logarithmically across a wide range (e.g., $10^{-4}$ to $1$).
+    \item For each learning rate, take a few optimization steps (e.g., 100 or 1000) and record the resulting loss.
+    \item Plot `loss` vs. `log(learning_rate)`.
+    \item The ideal learning rate is typically found in the "valley" of this plot, where the loss decreases consistently without becoming unstable (oscillating or exploding).
+\end{enumerate}
+
+\subsubsection{Sampling from the Model}
+After training, we can generate new sequences by sampling from the model's predicted probability distribution.
+
+\begin{lstlisting}[caption=Generating Samples from the Trained Model]
+# Generate 20 samples
+for _ in range(20):
+    out = [] # List to store generated characters
+    context = [0] * block_size # Start with initial context (all '.')
+
+    while True:
+        # Forward pass to get logits for the current context
+        emb = C[torch.tensor([context])] # (1, block_size, emb_dim) - single example
+        h = torch.tanh(emb.view(1, -1) @ W1 + b1) # (1, hidden_layer_size)
+        logits = h @ W2 + b2 # (1, vocab_size)
+
+        # Calculate probabilities using F.softmax (numerically stable)
+        probs = F.softmax(logits, dim=1)
+
+        # Sample the next character from the probability distribution
+        # torch.multinomial samples indices based on multinomial distribution
+        next_char_ix = torch.multinomial(probs, num_samples=1).item()
+
+        # Update context window and record the new character
+        context = context[1:] + [next_char_ix] # Slide window
+        out.append(next_char_ix)
+
+        # Break if we generate the end-of-sequence token ('.')
+        if next_char_ix == 0:
+            break
+
+    # Decode and print the generated name
+    print(''.join(itos[ix] for ix in out))
+\end{lstlisting}
+
+The generated samples will now appear much more "name-like" than those from the bigram model, indicating significant progress.
+
+\subsection{Further Improvements and Exploration}
+The model's performance can be further enhanced by tuning various hyperparameters and exploring advanced techniques:
+\begin{itemize}
+    \item \textbf{Model Architecture:}
+    \begin{itemize}
+        \item Number of neurons in the hidden layer (`hidden_layer_size`).
+        \item Dimensionality of the embedding lookup table (`emb_dim`).
+        \item Number of characters in the input context (`block_size`).
+    \end{itemize}
+    \item \textbf{Optimization Details:}
+    \begin{itemize}
+        \item Total number of training steps.
+        \item Learning rate schedule (how it changes over time, e.g., decay strategies).
+        \item Batch size (influences gradient noise and convergence speed).
+    \end{itemize}
+    \item \textbf{Reading the Paper:} The original Bengio et al. (2003) paper contains additional ideas for improvements.
+\end{itemize}
+
+\subsection{Google Colab Accessibility}
+For ease of experimentation, the Jupyter notebook for this lecture is available via Google Colab. This allows you to run and modify the code directly in your browser without any local installation of PyTorch or Jupyter. The link is typically provided in the video description.

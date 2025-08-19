@@ -1,0 +1,363 @@
+% ====================================================================
+% LECTURE 4: Building makemore Part 3 - Activations, Gradients, & BatchNorm
+% ====================================================================
+
+\section{Lecture 4: Building makemore Part 3 - Activations, Gradients, \& BatchNorm}
+
+\begin{abstract}
+Welcome, aspiring deep learning practitioners! In this comprehensive set of lecture notes, we delve deeper into the intricate world of neural networks, specifically focusing on the critical aspects of activation functions, gradient flow during backpropagation, and the transformative technique of Batch Normalization. Our journey continues from the foundational Multilayer Perceptron (MLP) for character-level language modeling, as implemented in the previous session, moving towards more complex architectures like Recurrent Neural Networks (RNNs) and Transformers. Before we tackle those, however, a solid intuitive understanding of what happens inside an MLP during training is paramount. This deep dive into activations and gradients is crucial for comprehending the historical development of neural network architectures and why certain innovations were necessary to enable the training of deeper, more expressive models.
+\end{abstract}
+
+\subsection{Starting Point: The MLP for makemore}
+
+Our initial setup is largely based on the previous MLP code, now refactored for clarity. We are still building a character-level language model that takes a few past characters as input to predict the next character in a sequence.
+
+\subsubsection{Code Refinements}
+\begin{itemize}
+    \item We've removed "magic numbers" by externalizing hyperparameters like embedding space dimensionality (`n_embd`) and number of hidden units (`n_hidden`). This makes the code more configurable.
+    \item The neural network remains structurally identical, featuring 11,000 parameters optimized over 200,000 steps with a batch size of 32.
+    \item Code has been refactored for better readability, including more comments and organized evaluation logic for different data splits (train, validation, test).
+\end{itemize}
+
+\subsubsection{The \texttt{torch.no_grad} Context}
+An important optimization used during evaluation is the `torch.no_grad` decorator or context manager. This explicitly tells PyTorch that any computations within its scope will not require gradient tracking. This prevents PyTorch from building and maintaining the computational graph for these operations, significantly improving efficiency during inference or evaluation where backward passes are not needed.
+
+\begin{lstlisting}
+@torch.no_grad()
+def evaluate_split(split_name):
+    # ... computation where gradients are not needed ...
+\end{lstlisting}
+
+\subsubsection{Current Model Performance}
+The model currently generates much nicer-looking words compared to a simpler Bigram model, though it's still not perfect. The typical train and validation loss observed was around 2.16.
+
+\subsection{Scrutinizing Initialization: Why It Matters So Much}
+
+The first issue we observe is a significantly high initial loss, indicating improper network configuration from the start.
+
+\subsubsection{Problem 1: Overconfident, Incorrect Predictions in the Output Layer}
+\begin{itemize}
+    \item \textbf{Observation}: At iteration 0, the loss is approximately 27, which rapidly decreases.
+    \item \textbf{Expected Initial Loss}: For a 27-character vocabulary (including a special '.' token), if the network were truly uninformed, it should output a uniform probability distribution for the next character. The probability for any character would be $1/27$. The negative log-likelihood loss for a uniform distribution over 27 classes is $-\log(1/27) \approx 3.29$.
+    \item \textbf{Discrepancy}: A loss of 27 is drastically higher than the expected 3.29. This implies the neural network is "confidently wrong" at initialization, assigning very high probabilities to incorrect characters.
+    \item \textbf{Root Cause}: The `logits` (raw outputs before softmax) are taking on extreme values, which, after softmax, lead to highly peaked (confident) but incorrect probability distributions.
+\end{itemize}
+
+\subsubsection{Solution 1: Normalizing Output Logits}
+To fix this, we want the logits to be roughly zero (or equal) at initialization, yielding a uniform probability distribution after softmax.
+\begin{itemize}
+    \item \textbf{Bias Initialization}: The output bias `B2` is currently initialized randomly. We want it to be approximately zero to avoid arbitrary offsets.
+    \item \textbf{Weight Scaling}: The logits are computed as `H @ W2 + B2`. To make logits small, we should scale down `W2`.
+    \item \textbf{Why not exact zero weights?}: While setting `W2` to exactly zero would give the perfectly uniform distribution we desire at initialization, it's generally avoided to maintain symmetry breaking. Small random values allow different neurons to learn different features from the start. We choose a small scaling factor like `0.01`.
+\end{itemize}
+
+\textbf{Before Fix}: Initial loss $\approx 27.0$.
+\textbf{After Fix}: Initial loss $\approx 3.32$ (closer to expected 3.29).
+
+\begin{lstlisting}
+# Original initialization (simplified):
+# self.W2 = torch.randn((n_hidden, vocab_size))
+# self.B2 = torch.randn(vocab_size)
+
+# Fixed initialization:
+self.W2 = torch.randn((n_hidden, vocab_size)) * 0.01 # Scale down W2
+self.B2 = torch.zeros(vocab_size) # Initialize B2 to zeros
+\end{lstlisting}
+
+\subsubsection{Impact of Fixing Logit Initialization}
+\begin{itemize}
+    \item The loss plot no longer exhibits a "hockey stick" appearance (a sharp initial drop followed by a plateau). This is because the initial easy task of "squashing down the logits" is removed, allowing the network to immediately focus on meaningful learning.
+    \item The final validation loss improves slightly (e.g., from 2.17 to 2.13). This is due to more productive training cycles, as the network isn't wasting early iterations on fixing a bad initialization.
+\end{itemize}
+
+\subsection{Problem 2: Saturation of Hidden Layer Activations (Tanh)}
+
+Even with a reasonable initial loss, there's a deeper problem within the hidden layer activations, particularly when using squashing activation functions like Tanh.
+
+\subsubsection{Observation: Saturated Tanh Activations}
+\begin{itemize}
+    \item The histogram of `H` (hidden state activations after Tanh) shows most values are concentrated at -1 or 1.
+    \item This means the Tanh neurons are "saturated," operating in the flat regions of the Tanh curve.
+    \item The `pre-activations` (inputs to Tanh) are very broad, ranging from -5 to 15, causing this saturation.
+\end{itemize}
+
+\subsubsection{The Vanishing Gradient Problem with Tanh}
+\begin{itemize}
+    \item \textbf{Tanh Backward Pass}: Recall the derivative of Tanh: `d(tanh(x))/dx = 1 - tanh(x)^2`. In backpropagation, the local gradient for Tanh is `1 - T^2`, where `T` is the output of the Tanh function.
+    \item \textbf{Gradient Killing}: If `T` is close to -1 or 1 (i.e., the neuron is saturated), `1 - T^2` becomes very close to zero. This local gradient multiplies the incoming gradient (`out.grad`), effectively "killing" or vanishing the gradient flow through that neuron.
+    \item \textbf{Intuition}: When an activation is in a flat region, changing its input has little to no impact on its output, and thus no impact on the loss. Consequently, its associated weights and biases receive negligible gradients and cannot learn.
+    \item \textbf{Dead Neurons}: If a neuron consistently lands in the saturated region for all training examples (i.e., its column of activations is entirely "white" when visualizing `abs(H) > 0.99`), it becomes a "dead neuron" that never learns.
+\end{itemize}
+
+\subsubsection{Other Nonlinearities and Dead Neurons}
+\begin{itemize}
+    \item \textbf{Sigmoid}: Suffers from the exact same vanishing gradient issue as Tanh due to its squashing nature.
+    \item \textbf{ReLU}: Has a flat region for negative inputs, where the gradient is exactly zero. A "dead ReLU neuron" occurs if its pre-activation is always negative, causing it to never activate and its weights/bias to never learn. This can happen at initialization or during training with a high learning rate.
+    \item \textbf{Leaky ReLU}: Designed to mitigate this by having a small non-zero slope for negative inputs, ensuring gradients almost always flow.
+    \item \textbf{ELU}: Also has flat parts for negative values, potentially suffering from similar issues.
+\end{itemize}
+
+\subsubsection{Solution 2: Normalizing Hidden Layer Activations}
+We want the `pre-activations` feeding into Tanh to be closer to zero, so that the Tanh outputs are more centered around zero and less saturated.
+\begin{itemize}
+    \item \textbf{Bias Initialization}: Similar to `B2`, `B1` (hidden layer bias) can be initialized to small numbers (e.g., multiplied by 0.01) to introduce a little entropy and diversity, aiding optimization.
+    \item \textbf{Weight Scaling}: Scale down `W1` (hidden weights). Through experimentation, a factor like `0.2` or `0.1` works well initially.
+\end{itemize}
+
+\textbf{Before Fix}: `W1 = torch.randn((n_embd * block_size, n_hidden))`
+\textbf{Fixed initialization}: `W1 = torch.randn((n_embd * block_size, n_hidden)) * 0.2`
+
+\begin{lstlisting}
+# Original initialization (simplified):
+# self.W1 = torch.randn((n_embd * block_size, n_hidden))
+# self.B1 = torch.randn(n_hidden)
+
+# Fixed initialization:
+self.W1 = torch.randn((n_embd * block_size, n_hidden)) * 0.2 # Scale down W1
+self.B1 = torch.randn(n_hidden) * 0.01 # Initialize B1 with small entropy
+\end{lstlisting}
+
+\subsubsection{Impact of Fixing Tanh Saturation}
+\begin{itemize}
+    \item The histogram of `H` shows a much better distribution, with `pre-activations` between -1.5 and 1.5. There are no saturated neurons (no "white" in the visualization).
+    \item The final validation loss further improves (e.g., from 2.13 to 2.10).
+    \item This illustrates that better initialization leads to more productive training and ultimately better performance, especially crucial for deeper networks where these problems compound.
+\end{itemize}
+
+\subsection{Principled Initialization: Beyond "Magic Numbers"}
+
+Manually tuning these scaling factors (`0.1`, `0.2`, `0.01`) becomes impossible for deep networks with many layers. We need a principled approach.
+
+\subsubsection{The Goal: Preserving Activation Distributions}
+The objective is to ensure that activations throughout the neural network maintain a relatively similar distribution, ideally a unit Gaussian (mean 0, standard deviation 1). If activations grow too large, they saturate; if too small, they vanish.
+
+\subsubsection{Mathematical Derivation for Linear Layers}
+Consider a linear layer `Y = X @ W`. If `X` and `W` are sampled from zero-mean Gaussian distributions, the standard deviation of `Y` is given by:
+$\sigma_Y = \sigma_X \cdot \sigma_W \cdot \sqrt{\text{fan\_in}}$.
+
+To maintain $\sigma_Y = \sigma_X = 1$ (i.e., unit Gaussian activations), we need to set $\sigma_W = 1 / \sqrt{\text{fan\_in}}$, where `fan_in` is the number of input features to the weight matrix.
+
+\begin{lstlisting}
+# Example demonstrating standard deviation preservation
+# x: input (1000 examples, 10 dimensions)
+# W: weights (10 inputs, 200 outputs)
+# fan_in = 10 (number of inputs to each neuron in W)
+
+# When W is scaled by 1/sqrt(fan_in):
+# W = torch.randn((10, 200)) / (10**0.5)
+# y = x @ W
+# y.std() will be approximately 1.0
+\end{lstlisting}
+
+\subsubsection{Kaiming Initialization (He Initialization)}
+\begin{itemize}
+    \item \textbf{Context}: The paper "Delving Deep into Rectifiers" by Kaiming He et al. (2015) extensively studied initialization, particularly for Convolutional Neural Networks (CNNs) and ReLU/PReLU nonlinearities.
+    \item \textbf{The Gain Factor}: For ReLU, which clamps negative values to zero (discarding half the distribution), an additional gain factor is needed. They found that weights should be initialized with a zero-mean Gaussian distribution with standard deviation $\sigma_W = \sqrt{2 / \text{fan\_in}}$. The `$\sqrt{2}$` compensates for the "loss" of half the distribution.
+    \item \textbf{PyTorch Implementation}: `torch.nn.init.kaiming_normal_` implements this. It takes `mode` (either `fan_in` or `fan_out`, indicating which dimension to normalize by) and `nonlinearity` (e.g., `relu`, `tanh`, `linear`).
+        \begin{itemize}
+            \item `linear` (or identity): Gain is 1. $\sigma_W = \sqrt{1 / \text{fan\_in}}$.
+            \item `relu`: Gain is $\sqrt{2}$. $\sigma_W = \sqrt{2 / \text{fan\_in}}$.
+            \item `tanh`: Advised gain is $5/3$. This is because Tanh is a "contractive transformation" (it squashes the tails), so a gain is needed to "fight the squeezing" and renormalize the distribution.
+        \end{itemize}
+\end{itemize}
+
+\subsubsection{Practical Initialization with Kaiming}
+For our Tanh-based MLP, the `fan_in` for `W1` is `n_embd * block_size` (30 in our case). The Kaiming initialization for Tanh suggests `std = (5/3) / sqrt(fan_in)`.
+
+\begin{lstlisting}
+# Initializing W1 using Kaiming-like approach for Tanh
+fan_in_W1 = n_embd * block_size # Which is 30
+gain_tanh = (5/3) # Kaiming gain for Tanh
+std_W1 = gain_tanh / (fan_in_W1**0.5)
+
+self.W1 = torch.randn((n_embd * block_size, n_hidden)) * std_W1
+\end{lstlisting}
+
+This principled initialization leads to results comparable to our manual tuning but is scalable to much deeper networks without guesswork.
+
+\subsubsection{Modern Innovations Reducing Initialization Sensitivity}
+While proper initialization is beneficial, its precise calibration has become less critical due to several modern innovations:
+\begin{itemize}
+    \item \textbf{Residual Connections}: These allow gradients to bypass layers, preventing vanishing/exploding gradients in deep networks.
+    \item \textbf{Normalization Layers}: Techniques like Batch Normalization, Layer Normalization, and Group Normalization actively control activation statistics during training.
+    \item \textbf{Better Optimizers}: Advanced optimizers like RMSprop and Adam adapt learning rates for different parameters, making training more robust to initialization.
+\end{itemize}
+
+\subsection{Batch Normalization: A Game Changer}
+
+Introduced by Google in 2015, Batch Normalization (BatchNorm) fundamentally changed the landscape of training very deep neural networks.
+
+\subsubsection{The Core Idea: Standardizing Activations}
+\begin{itemize}
+    \item Instead of carefully initializing weights to ensure Gaussian activations, BatchNorm simply \textit{forces} them to be Gaussian-like (zero mean, unit standard deviation) by normalizing them.
+    \item This standardization is a fully differentiable operation, allowing it to be integrated into the network and trained via backpropagation.
+    \item The normalization is performed \textit{per batch} and \textit{per neuron}. For a pre-activation tensor `H_preact` of shape `(batch_size, num_neurons)`, the mean and standard deviation are calculated across the `batch_size` dimension for each of the `num_neurons`.
+\end{itemize}
+
+The normalization formula for an activation $x_i$ within a mini-batch is:
+$ \hat{x}_i = \frac{x_i - \mu_B}{\sqrt{\sigma_B^2 + \epsilon}} $
+where $\mu_B$ is the mini-batch mean, $\sigma_B^2$ is the mini-batch variance, and $\epsilon$ is a small constant to prevent division by zero.
+
+\subsubsection{Learnable Scale and Shift Parameters (Gamma and Beta)}
+\begin{itemize}
+    \item While normalizing to unit Gaussian is good for initialization, we don't want to \textit{force} activations to always be unit Gaussian throughout training. The network should have the flexibility to adjust the distribution as needed.
+    \item BatchNorm introduces two learnable parameters per neuron: `gain` (gamma, $\gamma$) and `bias` (beta, $\beta$).
+    \item The final output of a BatchNorm layer is: $y_i = \gamma \hat{x}_i + \beta$.
+    \item Initially, $\gamma$ is set to 1 and $\beta$ to 0, ensuring unit Gaussian output. During training, $\gamma$ and $\beta$ are updated via backpropagation, allowing the network to scale and shift the normalized activations if optimal for learning.
+    \item These $\gamma$ and $\beta$ parameters are part of the network's trainable parameters and contribute to the overall parameter count.
+\end{itemize}
+
+\begin{lstlisting}
+# Example of batch normalization in forward pass
+# H_preact: (batch_size, n_hidden)
+mean = H_preact.mean(0, keepdim=True) # mean across batch dimension, (1, n_hidden)
+std = H_preact.std(0, keepdim=True)   # std across batch dimension, (1, n_hidden)
+
+H_preact_norm = (H_preact - mean) / (std + 1e-5) # Add epsilon to prevent div by zero
+
+# Learnable parameters (initialized at 1 for gain, 0 for bias)
+bn_gain = torch.ones((1, n_hidden))
+bn_bias = torch.zeros((1, n_hidden))
+
+H = bn_gain * H_preact_norm + bn_bias # Scaled and shifted normalized activations
+\end{lstlisting}
+
+\subsubsection{Placement of BatchNorm Layers}
+It is customary to place BatchNorm layers right after linear or convolutional layers and before the nonlinearity (e.g., Tanh or ReLU). This sequence helps control the scale of activations at every point in the neural network, simplifying the tuning of weight matrices.
+
+\subsubsection{BatchNorm's Side Effects: Regularization and Coupled Examples}
+\begin{itemize}
+    \item \textbf{Coupled Examples}: BatchNorm couples examples within a batch. The normalization for any given input depends on the statistics (mean and standard deviation) of all other examples in the current batch. This introduces a "jitter" or noise into the activations.
+    \item \textbf{Regularization}: This "jittering" acts as a form of regularization, akin to data augmentation. It makes it harder for the network to overfit to specific examples, thus improving generalization. This secondary regularizing effect is a key reason BatchNorm has been so difficult to replace despite its drawbacks.
+\end{itemize}
+
+\subsubsection{BatchNorm at Inference Time}
+\begin{itemize}
+    \item \textbf{Problem}: During inference, we typically process single examples or very small batches. Using batch statistics would lead to unstable and non-deterministic predictions.
+    \item \textbf{Solution: Running Statistics}: BatchNorm layers maintain "running mean" and "running variance" (or standard deviation) during training using an exponential moving average (EMA). These are not updated by gradient descent but are buffers updated "on the side" during the forward pass.
+    \item \textbf{Inference Behavior}: At test time, these fixed running statistics are used instead of mini-batch statistics to normalize inputs, ensuring deterministic and consistent predictions for individual examples.
+\end{itemize}
+
+\begin{lstlisting}
+# Updating running mean and std during training
+# (bn_mean_running and bn_std_running are initialized as buffers)
+with torch.no_grad():
+    bn_mean_running = 0.999 * bn_mean_running + 0.001 * mean # (0.001 is momentum)
+    bn_std_running = 0.999 * bn_std_running + 0.001 * std
+
+# At inference, use:
+# H_preact_norm = (H_preact - bn_mean_running) / (bn_std_running + 1e-5)
+\end{lstlisting}
+
+\subsubsection{Bias Elimination in Preceding Layers}
+When a BatchNorm layer follows a linear or convolutional layer, the bias parameter (`B1` in our MLP's `W1 @ H + B1`) in that preceding layer becomes redundant. BatchNorm calculates and subtracts the mean, effectively cancelling out any constant bias added before it. Therefore, if a layer is followed by BatchNorm, its `bias` parameter can be set to `False` in PyTorch's `nn.Linear` or `nn.Conv2d` to avoid unnecessary parameters.
+
+\begin{lstlisting}
+# In a BatchNorm-enabled network, for a linear layer followed by BatchNorm:
+# self.linear = nn.Linear(input_features, output_features, bias=False)
+# self.bn = nn.BatchNorm1d(output_features)
+\end{lstlisting}
+
+\subsubsection{BatchNorm in PyTorch (\texttt{torch.nn.BatchNorm1d})}
+\begin{itemize}
+    \item \textbf{Parameters}: Takes `num_features` (dimensionality of the activation, e.g., `n_hidden`=200).
+    \item \textbf{Keyword Arguments}:
+        \begin{itemize}
+            \item `eps` (epsilon): Default `1e-5`. Prevents division by zero.
+            \item `momentum`: Default `0.1`. Controls the EMA update rate for running statistics. Smaller momentum (`0.001`) is better for small batch sizes where batch statistics fluctuate more.
+            \item `affine`: Default `True`. Determines if learnable `gamma` (weight) and `beta` (bias) parameters are included.
+            \item `track_running_stats`: Default `True`. Determines if running mean/variance are tracked. Set to `False` if you plan to calibrate statistics manually after training.
+        \end{itemize}
+    \item \textbf{Internal State}: `weight` (gamma) and `bias` (beta) are `parameters` (trainable via backprop). `running_mean` and `running_var` are `buffers` (updated by EMA, not backprop).
+    \item \textbf{`.training` attribute}: This flag (default `True`) dictates behavior. If `True`, batch statistics are used, and running stats are updated. If `False` (e.g., in `model.eval()` mode), running statistics are used, and they are not updated.
+\end{itemize}
+
+\subsubsection{The BatchNorm "Motif" in Deep Networks}
+The common pattern for deep neural networks, especially those using ReLU or Tanh, is a sequence like:
+\textbf{Linear/Convolutional Layer $\rightarrow$ BatchNorm Layer $\rightarrow$ Non-linearity (e.g., Tanh/ReLU)}.
+
+This motif (e.g., `Conv -> BatchNorm -> ReLU`) is prevalent in architectures like ResNet, stabilizing training by continuously controlling activation distributions.
+
+\subsection{Diagnostic Tools for Neural Network Health}
+
+Understanding the internal state of a neural network during training is crucial. We can visualize histograms and statistics of activations, gradients, and parameters.
+
+\subsubsection{Forward Pass Activations}
+\begin{itemize}
+    \item \textbf{What to Look For}: Histograms of activations (e.g., after Tanh layer). We track mean, standard deviation, and "percent saturation" (e.g., `abs(T) > 0.97` for Tanh).
+    \item \textbf{Desired State}: Homogeneous distributions across layers, roughly centered around zero, with reasonable standard deviation, and low saturation (e.g., $\approx 5\%$) for squashing non-linearities like Tanh.
+    \item \textbf{Issue Indicators}:
+        \begin{itemize}
+            \item \textit{Shrinking to zero}: Activations become very small, leading to vanishing gradients.
+            \item \textit{Exploding}: Activations become very large, leading to saturation and vanishing gradients.
+        \end{itemize}
+\end{itemize}
+
+\subsubsection{Backward Pass Gradients}
+\begin{itemize}
+    \item \textbf{What to Look For}: Histograms of gradients of activations (`.grad` attribute of the `out` tensors after a backward pass). We track mean and standard deviation.
+    \item \textbf{Desired State}: Homogeneous distributions across layers, indicating gradients flow effectively without shrinking or exploding.
+    \item \textbf{Issue Indicators}: Vanishing or exploding gradients, where gradients in early layers are significantly smaller or larger than those in later layers.
+\end{itemize}
+
+\subsubsection{Parameter Distributions}
+\begin{itemize}
+    \item \textbf{What to Look For}: Histograms of the weights (parameters) themselves. We track mean and standard deviation.
+    \item \textbf{Desired State}: Parameters should have reasonable means and standard deviations, ideally maintaining a good spread.
+    \item \textbf{Issue Indicators}: Very skewed distributions, or large discrepancies in magnitude across different layers.
+\end{itemize}
+
+\subsubsection{Update-to-Data Ratio}
+\begin{itemize}
+    \item \textbf{What to Look For}: This is a crucial diagnostic. It's the ratio of the magnitude of the update applied to a parameter (`learning_rate * grad`) to the magnitude of the parameter itself (`param_data`). Specifically, `std(learning_rate * param.grad) / std(param.data)`. Often visualized on a `log10` scale.
+    \item \textbf{Intuition}: This ratio indicates how much a parameter changes relative to its current value in one update step.
+    \item \textbf{Desired State}: A rough heuristic is that `log10(ratio)` should be around -3. This means the updates are roughly 1/1000th the magnitude of the parameters, allowing for stable, continuous learning.
+    \item \textbf{Issue Indicators}:
+        \begin{itemize}
+            \item \textit{Too High (e.g., > -2)}: The learning rate is likely too high, or updates are too large, causing parameters to thrash or overshoot.
+            \item \textit{Too Low (e.g., < -4)}: The learning rate is likely too low, or updates are too small, causing parameters to learn too slowly.
+            \item \textit{Discrepancies across layers}: If some layers have significantly different update ratios, it suggests an imbalance in training speed across the network.
+        \end{itemize}
+\end{itemize}
+
+\subsection{Building Custom PyTorch-like Modules}
+To facilitate structured neural network construction and diagnostics, we've refactored our code into custom modules that mimic PyTorch's `nn.Module` API.
+
+\subsubsection{\texttt{Linear} Module}
+\begin{itemize}
+    \item Initializes `weight` and optional `bias` tensors.
+    \item `weight` is initialized using Kaiming-like initialization (`1 / sqrt(fan_in)` for default, with gain adjustments for nonlinearities). `bias` defaults to zeros.
+    \item `forward` method performs `X @ W + B`.
+    \item `parameters` method returns trainable tensors (`weight`, `bias`).
+\end{itemize}
+
+\subsubsection{\texttt{BatchNorm1d} Module}
+\begin{itemize}
+    \item Initializes `gamma` (weight) and `beta` (bias) as trainable parameters.
+    \item Initializes `running_mean` and `running_variance` as non-trainable buffers.
+    \item Includes an `epsilon` for numerical stability and `momentum` for running average updates.
+    \item Has a `.training` attribute to switch between training (batch stats, update running stats) and evaluation (running stats, no updates) modes.
+    \item `forward` method calculates batch mean/variance (if training) or uses running mean/variance (if evaluating), normalizes, then applies gamma and beta.
+    \item Crucially, the running mean/variance update is wrapped in `torch.no_grad()` to prevent building a computational graph for these non-backpropagated buffers.
+\end{itemize}
+
+\subsubsection{\texttt{Tanh} Module}
+\begin{itemize}
+    \item A simple module that wraps `torch.tanh`.
+    \item Has no trainable parameters.
+\end{itemize}
+
+These modular components (layers) can then be easily stacked into a sequential model, resembling how models are constructed in `torch.nn`.
+
+\subsection{Conclusion}
+\begin{itemize}
+    \item This lecture emphasized the critical importance of understanding the internal dynamics of neural networks: activations, gradients, and their distributions.
+    \item We learned how improper initialization can lead to high initial loss and saturated activations, hindering effective training.
+    \item Principled initialization methods, like Kaiming initialization, provide a systematic way to scale weights to preserve activation distributions.
+    \item Batch Normalization was introduced as a pivotal innovation that stabilizes deep network training by actively normalizing activations. It simplifies the initialization challenge and acts as a regularizer, though it introduces complexity with coupled examples and running statistics.
+    \item We explored powerful diagnostic tools (histograms of activations, gradients, parameters, and the update-to-data ratio) that help assess the "health" of a neural network during training, guiding hyperparameter tuning like learning rate selection.
+    \item While these advancements have significantly improved training reliability, the field of initialization and optimization remains an active research area, and there are still open questions.
+    \item Our current model's performance may now be bottlenecked by architectural limitations (e.g., context length), pointing towards the need for more advanced architectures like RNNs and Transformers, which we will explore in future lectures.
+\end{itemize}
+
+These principles and diagnostic techniques will become even more vital as we transition to deeper and more complex neural network architectures in the future.
