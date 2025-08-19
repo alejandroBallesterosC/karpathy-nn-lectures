@@ -10,4 +10,4 @@
 *.swp
 *.out
 *.toc
-/latex/*.pdf
+latex/*.pdf
