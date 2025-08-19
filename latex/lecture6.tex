@@ -1,0 +1,296 @@
+% ====================================================================
+% LECTURE 6: Building makemore Part 5 - Building a WaveNet
+% ====================================================================
+
+\section{Lecture 6: Building makemore Part 5 - Building a WaveNet}
+
+\begin{abstract}
+In this lecture, we continue our journey with \texttt{makemore}, our character-level language model. Our goal is to evolve from a simple Multi-Layer Perceptron (MLP) to a more complex, deeper architecture, specifically one that resembles the structure of a WaveNet. We address the limitations of our current approach by increasing context length and implementing progressive information fusion through a hierarchical, tree-like architecture. This approach mirrors the WaveNet architecture published by DeepMind in 2016, demonstrating how deeper models can gradually incorporate context rather than squashing all input information into a single hidden layer immediately.
+\end{abstract}
+
+\subsection{Introduction: Towards Deeper, Hierarchical Models}
+
+Our current \texttt{makemore} model is a multi-layer perceptron that takes three previous characters as input and attempts to predict the fourth. This architecture uses a single hidden layer, but we want to address two key limitations:
+
+\begin{enumerate}
+    \item \textbf{Increased Context}: We want to take more than just three characters as input.
+    \item \textbf{Progressive Information Fusion}: Instead of squashing all input information into a single hidden layer immediately, we desire a deeper model that fuses information progressively.
+\end{enumerate}
+
+By implementing these changes, we will arrive at an architecture very similar to a WaveNet. WaveNet, published by DeepMind in 2016, is fundamentally an auto-regressive language model, but it was designed to predict audio sequences rather than character or word sequences. However, its core modeling setup, predicting the next element in a sequence, is identical to our task. The WaveNet architecture uses an interesting hierarchical, tree-like approach to prediction, which is what we will implement.
+
+\subsection{Recap of Previous \texttt{makemore} Implementation}
+
+Our starting code for Part 5 is based on Part 3, as Part 4 was a separate exercise focused on manual backpropagation.
+
+\subsubsection{Data Generation and Processing}
+We read a dataset of words and process them into individual examples. The data generation code remains unchanged. We currently have 182,000 examples, where each example consists of three characters used to predict the fourth.
+
+\subsubsection{Module-Based Architecture}
+In Part 3, we began developing our code around modular \texttt{Layer} classes, such as \texttt{Linear}, \texttt{BatchNorm1d}, and \texttt{Tanh}. This approach treats layers as ``building blocks,'' similar to Lego bricks, allowing us to stack them to form neural networks and feed data between them. These custom layers were designed to mimic the API signatures of PyTorch's \texttt{torch.nn} modules.
+
+\begin{itemize}
+    \item \textbf{\texttt{Linear} Layer}: Performs a matrix multiplication in its forward pass.
+    \item \textbf{\texttt{BatchNorm1d} Layer}: This layer is notable for several reasons:
+    \begin{itemize}
+        \item It maintains \texttt{running\_mean} and \texttt{running\_variance} statistics, which are updated via exponential moving average during the forward pass and are not trained via backpropagation.
+        \item It has different behaviors during \texttt{train} time and \texttt{eval} (evaluation) time, requiring careful state management. Forgetting to set the correct mode is a common source of bugs.
+        \item It couples the computation across examples within a batch, which is unusual as batches are typically seen only for efficiency. This coupling is for controlling activation statistics.
+        \item Its stateful nature (due to running statistics and train/eval modes) can lead to bugs, especially if means and variances haven't settled.
+    \end{itemize}
+    \item \textbf{\texttt{Tanh} Layer}: A simple element-wise activation function.
+\end{itemize}
+
+The global random number generator (RNG) object, previously passed into layers, has been removed for simplicity, using a single global \texttt{torch.Generator} initialized once.
+
+Our current neural network structure is:
+\begin{itemize}
+    \item An embedding table \texttt{C}.
+    \item A sequence of layers: \texttt{Linear} $\rightarrow$ \texttt{BatchNorm1d} $\rightarrow$ \texttt{Tanh} $\rightarrow$ \texttt{Linear} (output layer).
+    \item The output layer weights are scaled down to prevent large errors at initialization.
+\end{itemize}
+The model has about 12,000 parameters. The optimization process (Adam optimizer, learning rate decay) remains identical to previous parts.
+
+\subsubsection{Current Performance Baseline}
+Before evaluating, all layers (specifically \texttt{BatchNorm1d}) must be set to \texttt{training=False}. Our current validation loss is around 2.10, which is ``fairly good'' but can be improved. Sampled names like \texttt{Yvon}, \texttt{kilo}, \texttt{Pros}, \texttt{Alaia} are ``not unreasonable'' but ``not amazing''.
+
+\subsection{Code Refinements and ``PyTorch-ification''}
+
+We will now refactor our code to make it more organized, robust, and closer to PyTorch's standard practices.
+
+\subsubsection{Fixing the Loss Plot}
+The loss plot can be very ``jagged'' or ``thick'' due to small batch sizes (e.g., 32 batch elements) leading to high variance in individual batch losses. To get a more representative view of the loss curve, we can average consecutive loss values.
+
+\begin{lstlisting}[caption={Example of smoothing a loss list}]
+# Example of smoothing a loss list
+loss_list = [0.1, 0.2, ..., 0.9, 0.8, 0.7, ...]  # Assume a long list of losses
+
+# Convert to tensor and view as rows of 1000 consecutive elements
+# If loss_list has 200,000 elements, this becomes a 200x1000 tensor
+smoothed_losses = torch.tensor(loss_list).view(-1, 1000).mean(1)
+
+# Now, plt.plot(smoothed_losses) will produce a much smoother graph
+\end{lstlisting}
+
+This technique is very helpful as it averages consecutive values into rows, then takes the mean along those rows. The resulting plot shows learning rate decay reducing energy and helping the model settle into a local minimum.
+
+\subsubsection{Encapsulating Embedding and Flattening as Modules}
+Previously, the embedding table lookup and the \texttt{view} (flattening/concatenation) operation were special-cased outside our list of \texttt{layers}. To further ``PyTorch-ify'' our code, we create dedicated \texttt{Embedding} and \texttt{Flatten} modules.
+
+\begin{itemize}
+    \item \textbf{\texttt{Embedding} Module}: Handles the lookup of character embeddings. This mirrors \texttt{torch.nn.Embedding}.
+    \item \textbf{\texttt{Flatten} Module}: Rearranges character embeddings into a single long row, effectively concatenating them. This \texttt{view} operation is computationally free in PyTorch as it doesn't copy memory. This mirrors \texttt{torch.nn.Flatten}.
+\end{itemize}
+
+\begin{lstlisting}[caption={Custom Embedding Module}]
+# Custom Embedding Module
+class Embedding:
+    def __init__(self, num_embeddings, embedding_dim):
+        self.weight = torch.randn((num_embeddings, embedding_dim), generator=g)
+
+    def __call__(self, IX):
+        return self.weight[IX]
+
+    def parameters(self):
+        return [self.weight]
+
+# Custom Flatten Module
+class Flatten:
+    def __call__(self, x):
+        # x is B x T x C (Batch, Time, Channels)
+        # We want to flatten T and C into a single dimension
+        B, T, C = x.shape
+        return x.view(B, T * C)  # Or x.view(B, -1)
+
+    def parameters(self):
+        return []  # No trainable parameters
+\end{lstlisting}
+
+By incorporating these, the embedding table \texttt{C} becomes \texttt{self.weight} inside an \texttt{Embedding} module, and the forward pass is substantially simplified as these operations are now handled within our \texttt{layers} list.
+
+\subsubsection{Introducing the \texttt{Sequential} Container}
+PyTorch's \texttt{torch.nn} library includes ``containers'' like \texttt{Sequential}, which organize layers into lists and pass input sequentially through them. We implement our own \texttt{Sequential} module to manage our list of layers.
+
+\begin{lstlisting}[caption={Custom Sequential Module}]
+# Custom Sequential Module
+class Sequential:
+    def __init__(self, layers):
+        self.layers = layers
+
+    def __call__(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+    def parameters(self):
+        # Collect parameters from all child modules
+        params = []
+        for layer in self.layers:
+            params.extend(layer.parameters())
+        return params
+\end{lstlisting}
+
+This allows us to replace the ``naked list of layers'' with a \texttt{model} object, which is an instance of \texttt{Sequential}. This simplifies parameter collection (\texttt{model.parameters()}) and the forward pass (\texttt{model(xB)}).
+
+\subsubsection{Debugging the \texttt{BatchNorm1d} Sampling Issue}
+After refactoring, a bug emerged during sampling. When \texttt{BatchNorm1d} is in \texttt{training} mode and receives a batch with a single example, it attempts to estimate variance from a single number, which results in \texttt{NaN} (Not a Number). The variance of a single number is undefined. This \texttt{NaN} then pollutes subsequent calculations.
+
+The fix is to ensure that all layers, especially \texttt{BatchNorm1d}, are correctly set to \texttt{eval} mode (by calling \texttt{model.eval()}) when evaluating or sampling from the model. If \texttt{BatchNorm1d} is in \texttt{eval} mode, it uses its stored \texttt{running\_mean} and \texttt{running\_variance} instead of calculating batch statistics, thus avoiding the \texttt{NaN} issue with single-example batches.
+
+\subsection{Implementing the WaveNet-like Hierarchical Architecture}
+
+Our current MLP crushes all input characters into a single layer too quickly. The WaveNet architecture offers a solution by progressively fusing information from previous characters in a tree-like, hierarchical manner.
+
+\subsubsection{Motivation for Hierarchical Fusion}
+Instead of immediately squashing all 8 characters (our new \texttt{block\_size}) into a single wide hidden layer, we want the network to slowly fuse information. For instance, two characters are fused into a bigram representation, then two bigrams into a four-character chunk, and so on. This allows the network to get deeper while gradually incorporating context.
+
+\subsubsection{Increasing \texttt{block\_size}}
+First, we adjust the \texttt{block\_size} (the number of context characters) from 3 to 8. This means our model now takes 8 characters to predict the 9th. Even with the simple MLP structure, increasing context length from 3 to 8 characters already improved validation loss from 2.10 to 2.02. This serves as our new rough baseline performance.
+
+\subsubsection{Revisiting \texttt{Linear} and \texttt{Flatten} for Hierarchical Processing}
+
+Our current \texttt{Linear} layer expects a 2D input (e.g., \texttt{batch\_size x total\_features}), where \texttt{total\_features} is \texttt{block\_size * embedding\_dim}. However, PyTorch's matrix multiplication (used in \texttt{Linear}) is more flexible: it operates only on the \textit{last} dimension of the input tensor, treating all preceding dimensions as ``batch'' dimensions. This means we can have multiple ``batch'' dimensions and perform parallel matrix multiplications over them.
+
+This property is key for hierarchical fusion. We don't want to flatten all 8 characters into an 80-dimensional vector (\texttt{8 * 10}) and multiply it immediately. Instead, we want to group them (e.g., two characters at a time), process these groups in parallel, and then fuse the results.
+
+\paragraph{The Need for \texttt{FlattenConsecutive}}
+Currently, our \texttt{Flatten} module takes a \texttt{B x T x C} tensor (e.g., \texttt{4 x 8 x 10}) and flattens it into \texttt{B x (T*C)} (e.g., \texttt{4 x 80}). For hierarchical processing, we want \texttt{Flatten} to output \texttt{B x (T/N) x (N*C)}, where \texttt{N} is the number of consecutive elements we want to fuse (e.g., \texttt{N=2} for fusing pairs).
+
+For example, if \texttt{B=4}, \texttt{T=8}, \texttt{C=10}, and we want to fuse \texttt{N=2} consecutive character embeddings, the input to \texttt{FlattenConsecutive} is \texttt{4 x 8 x 10}. We want the output to be \texttt{4 x 4 x 20} (4 examples, 4 groups of 2 characters, each group becoming a 20-dimensional vector because $2 \times 10 = 20$).
+
+\begin{lstlisting}[caption={Custom FlattenConsecutive Module}]
+# Custom FlattenConsecutive Module
+class FlattenConsecutive:
+    def __init__(self, n):
+        # n: number of consecutive elements to concatenate in the last dimension
+        self.n = n
+
+    def __call__(self, x):
+        # x shape: B x T x C (Batch, Time/SequenceLength, Channels/EmbeddingDim)
+        B, T, C = x.shape
+
+        # Desired output shape: B x (T // n) x (C * n)
+        # (T // n) creates the new 'group' dimension (e.g., 8 chars / 2 = 4 groups)
+        # (C * n) combines the n consecutive elements into a single vector
+        x = x.view(B, T // self.n, C * self.n)
+
+        # Handle spurious dimension of 1, e.g., if T // n results in 1
+        # This occurs if the entire sequence length 'T' is handled as one group
+        # (e.g., block_size = 8, n = 8, then T // n = 1)
+        # In such cases, we want to return a 2D tensor (B x (C*n))
+        # rather than a 3D tensor with a middle dimension of 1 (B x 1 x (C*n))
+        if x.shape[1] == 1:
+            x = x.squeeze(1)  # Squeeze out the middle dimension if it's 1
+
+        return x
+
+    def parameters(self):
+        return []  # No trainable parameters
+\end{lstlisting}
+
+\paragraph{Building the Hierarchical Model Structure}
+With \texttt{FlattenConsecutive}, we can now construct a multi-layer hierarchical model. Each layer will:
+\begin{enumerate}
+    \item Apply \texttt{FlattenConsecutive(2)} to fuse pairs of elements from the previous layer's output.
+    \item Pass through a \texttt{Linear} layer (whose input size is now \texttt{N * C\_prev}).
+    \item Apply \texttt{BatchNorm1d}.
+    \item Apply \texttt{Tanh}.
+\end{enumerate}
+
+The model will now look like this:
+\texttt{Embedding} $\rightarrow$ \texttt{FlattenConsecutive(2)} $\rightarrow$ \texttt{Linear} $\rightarrow$ \texttt{BatchNorm1d} $\rightarrow$ \texttt{Tanh} $\rightarrow$ \texttt{FlattenConsecutive(2)} $\rightarrow$ \texttt{Linear} $\rightarrow$ \texttt{BatchNorm1d} $\rightarrow$ \texttt{Tanh} $\rightarrow$ \texttt{FlattenConsecutive(2)} $\rightarrow$ \texttt{Linear} $\rightarrow$ \texttt{BatchNorm1d} $\rightarrow$ \texttt{Tanh} $\rightarrow$ \texttt{Linear} (output).
+
+For example, using \texttt{block\_size = 8}, \texttt{n\_embed = 10}, and \texttt{n\_hidden = 68}:
+\begin{itemize}
+    \item Initial \texttt{xB} is \texttt{B x 8} (batch of 8 characters).
+    \item \texttt{Embedding} outputs \texttt{B x 8 x 10}.
+    \item \texttt{FlattenConsecutive(2)} outputs \texttt{B x 4 x 20} (4 groups of 2 characters, each fused into 20 dimensions).
+    \item \texttt{Linear} (input \texttt{20}, output \texttt{68}) transforms to \texttt{B x 4 x 68}.
+    \item \texttt{BatchNorm1d} and \texttt{Tanh} preserve \texttt{B x 4 x 68}.
+    \item Next \texttt{FlattenConsecutive(2)} outputs \texttt{B x 2 x (2*68) = B x 2 x 136}.
+    \item Next \texttt{Linear} (input \texttt{136}, output \texttt{68}) transforms to \texttt{B x 2 x 68}.
+    \item \texttt{BatchNorm1d} and \texttt{Tanh} preserve \texttt{B x 2 x 68}.
+    \item Next \texttt{FlattenConsecutive(2)} outputs \texttt{B x 1 x (2*68) = B x 1 x 136}. This dimension of 1 will be squeezed out to \texttt{B x 136}.
+    \item Next \texttt{Linear} (input \texttt{136}, output \texttt{68}) transforms to \texttt{B x 68}.
+    \item \texttt{BatchNorm1d} and \texttt{Tanh} preserve \texttt{B x 68}.
+    \item Final \texttt{Linear} (input \texttt{68}, output \texttt{vocab\_size}) transforms to \texttt{B x vocab\_size}. This is the final output logits.
+\end{itemize}
+This example effectively creates a three-layer hierarchical neural network. With \texttt{n\_hidden = 68}, the total parameter count is about 22,000, similar to our initial MLP, allowing for a fair architectural comparison.
+
+\subsection{Correcting \texttt{BatchNorm1d} for Higher-Dimensional Inputs}
+
+The current \texttt{BatchNorm1d} implementation was designed assuming 2D inputs of shape \texttt{N x D} (Batch size x Features). However, with the hierarchical architecture, \texttt{BatchNorm1d} now receives 3D inputs, such as \texttt{32 x 4 x 68} (Batch x Groups x Features).
+
+\subsubsection{The Bug and Its Consequences}
+Our \texttt{BatchNorm1d} calculates mean and variance by reducing only over the \textit{zeroth} dimension (the batch dimension). For a 3D input \texttt{32 x 4 x 68}, this means:
+\begin{itemize}
+    \item \texttt{mean} and \texttt{variance} will have shapes like \texttt{1 x 4 x 68}.
+    \item The \texttt{running\_mean} and \texttt{running\_variance} will also be \texttt{1 x 4 x 68}.
+\end{itemize}
+This implies that \texttt{BatchNorm1d} is maintaining separate statistics for each of the 4 ``group'' positions independently, rather than a single set of statistics for each of the 68 channels across all batch \textit{and} group dimensions. In essence, it's normalizing \texttt{4 * 68} channels independently, with each estimate using only 32 numbers, instead of 68 channels, where each estimate uses \texttt{32 * 4} numbers. This makes the estimates less stable and ``wiggly''.
+
+\subsubsection{The Fix}
+\texttt{torch.mean} and \texttt{torch.var} (used internally by \texttt{BatchNorm1d}) can take a tuple of dimensions to reduce over. To correctly normalize across both the batch dimension (0) and the groups dimension (1), we need to compute the mean and variance over \texttt{(0, 1)}.
+
+The output of such a reduction (e.g., \texttt{x.mean((0, 1))}) will be \texttt{1 x 1 x 68} for a 3D input of \texttt{B x T' x C'}. This correctly maintains 68 means/variances, one for each channel, estimated from all \texttt{B * T'} elements.
+
+\begin{lstlisting}[caption={Adaptation for BatchNorm1d}]
+# Adaptation for BatchNorm1d
+class BatchNorm1d:
+    # ... (existing __init__ and parameters methods) ...
+
+    def __call__(self, x):
+        # x.shape: B x D or B x T' x D' (where D or D' are number of channels)
+        
+        # Determine dimensions to reduce over based on input dimensionality
+        if x.ndim == 2:
+            dim_to_reduce = 0
+        elif x.ndim == 3:
+            dim_to_reduce = (0, 1)  # Reduce over batch and second (group) dimension
+        else:
+            raise ValueError(f"Unsupported input dimensionality: {x.ndim}")
+
+        # ... (rest of the BatchNorm1d logic, replacing 0 with dim_to_reduce) ...
+        # Example for calculating batch_mean:
+        # batch_mean = x.mean(dim=dim_to_reduce, keepdim=True)
+        # batch_var = x.var(dim=dim_to_reduce, keepdim=True)
+\end{lstlisting}
+
+\subsubsection{Departure from PyTorch API}
+It's important to note that our \texttt{BatchNorm1d} implementation now slightly deviates from \texttt{torch.nn.BatchNorm1d}. PyTorch's \texttt{BatchNorm1d} expects 3D inputs in the format \texttt{N x C x L} (Batch x Channels x Sequence Length), meaning it assumes channels are in the \textit{middle} dimension and reduces over dimensions \texttt{(0, 2)}. Our implementation assumes channels are in the \textit{last} dimension (\texttt{N x L x C}) and reduces over \texttt{(0, 1)}. This deviation is acceptable for our purposes as it aligns with our \texttt{FlattenConsecutive} design.
+
+\subsubsection{Performance After Bug Fix}
+After fixing \texttt{BatchNorm1d}, we observed a slight improvement in validation loss, from 2.029 to 2.022. This improvement is attributed to the more stable estimates of mean and variance, as they are now calculated using \texttt{32 * 4} numbers (for each channel) instead of just 32.
+
+\subsection{Scaling Up and Future Directions}
+
+With the more robust and general architecture, we can push performance further by increasing the network's capacity. For example, by increasing \texttt{n\_embed} from 10 to 24 and adjusting \texttt{n\_hidden}, the model now has 76,000 parameters. This led to a validation loss of 1.993, crossing the 2.0 territory.
+
+However, further improvements are hampered by longer training times and the lack of a proper ``experimental harness'' for systematic hyperparameter tuning.
+
+\subsubsection{Relation to Convolutional Neural Networks (CNNs)}
+The WaveNet paper uses ``dilated causal convolution layers''. What we have implemented is the \textit{logical structure} of the WaveNet's hierarchical fusion. The use of convolutions is primarily for \textbf{efficiency}, not to change the fundamental computation of the model.
+
+In our current implementation, if we want to predict the next character for all positions in a name (e.g., DeAndre, 8 examples), we would call our model 8 independent times in a Python loop. Convolutional layers, on the other hand, allow us to ``slide'' this model efficiently over the input sequence, performing this loop inside highly optimized CUDA kernels. Furthermore, convolutions enable \textbf{variable reuse}. For instance, a node's computed value might be the right child of one computation tree and the left child of another. In a naive loop, this value would be recomputed, but convolutions reuse it efficiently. So, what we've built is akin to a single ``black structure'' calculation, while convolutions allow us to calculate all orange outputs (all positions) simultaneously.
+
+\subsubsection{Key Takeaways and Development Process Notes}
+\begin{enumerate}
+    \item \textbf{Module-Based Development}: We've reinforced the concept of building neural networks using modular ``Lego building blocks'' (layers and containers), essentially re-implementing parts of \texttt{torch.nn}. This understanding prepares us to use \texttt{torch.nn} directly in future work.
+    \item \textbf{Deep Learning Development Workflow}:
+    \begin{itemize}
+        \item \textbf{Documentation Challenges}: PyTorch's documentation can be inconsistent, incomplete, or even incorrect. Developers often have to do their best with what's available.
+        \item \textbf{Shape Gymnastics}: A significant amount of time is spent ensuring that tensor shapes align across layers (e.g., 2D, 3D, 4D, \texttt{NCL} vs \texttt{NLC} conventions). This is a common, often messy, part of deep learning development.
+        \item \textbf{Prototyping in Notebooks}: It's common practice to prototype layer implementations and debug shapes in Jupyter notebooks. Once satisfied, the code is transferred to a more structured repository (e.g., VS Code) for running full experiments.
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Future Lectures and Challenges}
+This lecture unlocks several exciting future topics:
+\begin{enumerate}
+    \item Implementing \texttt{Conv1d} layers for efficiency.
+    \item Exploring residual connections and skip connections, as seen in WaveNet and other architectures.
+    \item Setting up a robust experimental harness for systematic hyperparameter tuning, which is crucial for typical deep learning workflows.
+    \item Covering other important architectures like Recurrent Neural Networks (RNNs), LSTMs, GRUs, and of course, Transformers.
+\end{enumerate}
+
+Finally, a challenge: try to beat the current validation loss of 1.993! There's likely still room for improvement by tuning hyperparameters, allocating channel budgets differently, or even implementing more features from the original WaveNet paper (like gated linear units). It's not obvious that this hierarchical architecture will necessarily outperform a highly-tuned simple MLP, so experimentation is key.

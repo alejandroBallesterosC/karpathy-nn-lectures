@@ -1,0 +1,330 @@
+% ====================================================================
+% LECTURE 8: The State of GPT - From Training to Effective Application
+% ====================================================================
+
+\section{Lecture 8: The State of GPT - From Training to Effective Application}
+
+\begin{abstract}
+This lecture outlines the current recipe for training GPT assistants and explores effective methods for their application. The rapidly growing ecosystem of Large Language Models (LLMs) and GPT assistants represents a significant area of development in Artificial Intelligence. We examine the multi-stage training pipeline from pre-training to reinforcement learning from human feedback (RLHF), and provide practical guidance on applying these models effectively through prompt engineering, tool integration, and fine-tuning strategies. It is important to note that this field is still very new and continues to evolve rapidly.
+\end{abstract}
+
+\subsection{Introduction to GPT Assistants and Large Language Models}
+
+The training of GPT assistants typically follows a multi-stage recipe, which is currently an emerging standard. This process is largely sequential, with each stage building upon the previous one. Each stage in the training pipeline is powered by a specific dataset, driven by an algorithm (objective function), and results in a refined model.
+
+\subsubsection{The Four Major Training Stages}
+
+\begin{enumerate}
+    \item \textbf{Pre-training}: Focuses on creating a ``base model''.
+    \item \textbf{Supervised Fine-tuning (SFT)}: Develops an ``SFT model''.
+    \item \textbf{Reward Modeling}: Creates a ``reward model''.
+    \item \textbf{Reinforcement Learning (RL)}: Produces the final ``assistant model''.
+\end{enumerate}
+
+It is crucial to understand that the pre-training stage is distinct and vastly more computationally intensive than the subsequent fine-tuning stages.
+
+\subsection{Stage 1: Pre-training (Achieving a Base Model)}
+
+This stage is the foundation and consumes approximately 99\% of the total computational work, including compute time and FLOPs. It involves internet-scale datasets, thousands of GPUs, and can take months of training. The other three fine-tuning stages are comparatively smaller, requiring fewer GPUs and only hours or days.
+
+\subsubsection{Data Gathering (Data Mixture)}
+
+A massive amount of data is collected and mixed from various sources. Examples of datasets include:
+\begin{itemize}
+    \item \textbf{Common Crawl}: A web scrape.
+    \item \textbf{C4}: Also derived from Common Crawl.
+    \item \textbf{High-Quality Datasets}: GitHub, Wikipedia, books, Archive, Stack Exchange, and similar sources.
+\end{itemize}
+These datasets are mixed and sampled according to specific proportions to form the training set for the GPT's neural network.
+
+\subsubsection{Tokenization}
+
+Before training, raw text from the internet must be pre-processed into sequences of integers. This process, called tokenization, is lossless and translates text into the native representation for GPTs. A common algorithm for this is Byte Pair Encoding (BPE), which iteratively merges text chunks into tokens.
+
+\subsubsection{Hyperparameters in Pre-training}
+
+Key hyperparameters govern the scale and capacity of the pre-trained models:
+\begin{itemize}
+    \item \textbf{Vocabulary Size}: Typically around tens of thousands of tokens (e.g., 50,257 tokens mentioned).
+    \item \textbf{Context Length}: The maximum number of integers (tokens) the GPT will consider when predicting the next integer in a sequence. This can range from 2,000 to 4,000, and even up to 100,000 tokens in modern models.
+    \item \textbf{Number of Parameters}: While GPT-3 had 175 billion parameters, a model like LLaMA with 65 billion parameters can be significantly more powerful due to being trained on a much larger corpus of tokens (e.g., 1.4 trillion tokens for LLaMA vs. 300 billion for GPT-3). This indicates that the quantity of training data can outweigh raw parameter count in determining model power.
+    \item \textbf{Transformer Network Architecture}: Parameters like the number of attention heads, dimension size, and number of layers define the Transformer neural network.
+    \item \textbf{Training Resources}: Training a 65 billion parameter model (like LLaMA) can involve approximately 2,000 GPUs, 21 days of training, and cost several million dollars.
+\end{itemize}
+
+\subsubsection{The Pre-training Process (Language Modeling Objective)}
+
+During pre-training, tokens are arranged into data batches, typically as two-dimensional arrays of size $B \times T$, where $B$ is the batch size and $T$ is the maximum context length. Documents are packed into rows and delimited by special ``end of text'' tokens to indicate new document boundaries.
+
+The core task is language modeling: for every position in the sequence, the Transformer neural network attempts to predict the next token based on all preceding tokens.
+\begin{itemize}
+    \item For a given token (e.g., a ``green cell'' in a diagram), the Transformer processes all prior tokens (the ``yellow tokens'') as its context.
+    \item The output is a probability distribution over the entire vocabulary, indicating the likelihood of each possible next token.
+    \item This prediction is supervised: the actual next token in the sequence serves as the ground truth.
+    \item A loss function (e.g., cross-entropy loss) is used to update the Transformer's weights, encouraging it to assign higher probabilities to the correct next token. This process happens in parallel across all cells and is iterated over many batches of data.
+\end{itemize}
+
+Initially, with random weights, the model produces incoherent outputs. As training progresses, the model learns to generate increasingly coherent and consistent text, eventually understanding elements like words, spaces, and punctuation.
+
+\subsubsection{Output of Pre-training: Base Models}
+
+The pre-training process, specifically the language modeling task, compels the Transformer to learn powerful general representations of language and underlying concepts. This means the model is forced to implicitly ``multitask'' a vast number of linguistic tasks just by predicting the next token.
+
+\paragraph{Early Application: Fine-tuning (GPT-1 Era)}
+Initially, a primary application of these pre-trained ``base models'' was efficient fine-tuning for specific downstream tasks, even with very few examples. For instance, instead of training a sentiment classification model from scratch, one could fine-tune a pre-trained Transformer.
+
+\paragraph{Evolution: Prompt Engineering (GPT-2 Era)}
+It was later discovered that pre-trained base models could be effectively ``prompted'' without any further fine-tuning. Since these models are designed to complete documents, they can be ``tricked'' into performing tasks by structuring prompts that imitate a desired document format. For example, a few-shot prompt (providing a few Q\&A examples before posing a new question) can elicit an answer as the model attempts to complete the document. This technique became known as ``prompt engineering'' and demonstrated that powerful results could be achieved without neural network training or fine-tuning.
+
+\paragraph{Base Models vs. Assistant Models}
+It is crucial to distinguish between base models and ``assistant models''.
+\begin{itemize}
+    \item \textbf{Base Models}: These are document completers, not designed to answer questions or be conversational assistants. If asked to ``write a poem about bread and cheese,'' a base model might respond with more questions or just continue the pattern it thinks it's completing. While it is possible to craft specific few-shot prompts to make a base model behave somewhat like an assistant, this approach is generally unreliable.
+    \item \textbf{Assistant Models}: These are specifically trained (via subsequent stages) to be helpful assistants. ChatGPT, for instance, is an assistant model.
+\end{itemize}
+
+Examples of base models include GPT-3 (available via API as DaVinci) and GPT-2 (weights available on GitHub). The GPT-4 base model was never publicly released. The LLaMA series from Meta is considered one of the best available base models currently, though it lacks commercial licensing.
+
+\subsection{Stage 2: Supervised Fine-tuning (SFT Model)}
+
+To create actual GPT assistants that reliably respond to queries, supervised fine-tuning is employed.
+
+\subsubsection{Data Collection for SFT}
+This stage involves collecting small but high-quality datasets consisting of ``prompt and ideal response'' pairs. Human contractors are typically hired to gather this data, generating ideal responses to prompts. These contractors follow extensive labeling documentation, instructing them to be helpful, truthful, and harmless. Tens of thousands of such pairs are typically collected.
+
+\subsubsection{Algorithm for SFT}
+The algorithmic approach remains language modeling, identical to pre-training. However, the training set is swapped from large quantities of general internet documents to lower quantities of high-quality, task-specific prompt-response data.
+
+\subsubsection{Output of SFT}
+The result is an ``SFT model,'' which can be deployed as a functional assistant. These models work to some extent in answering queries directly.
+
+\subsection{Stages 3 \& 4: Reinforcement Learning from Human Feedback (RLHF)}
+
+RLHF is a further refinement pipeline that consists of two sub-stages: Reward Modeling and Reinforcement Learning.
+
+\subsubsection{Why RLHF?}
+
+RLHF is generally employed because it significantly improves model performance beyond SFT. Human evaluation consistently shows a preference for models trained with RLHF (e.g., PPO models) over SFT models or base models prompted to act as assistants.
+
+One hypothesis for this improvement lies in the asymmetry between generation and comparison. It is often much easier for humans to judge the quality of several generated outputs than to meticulously craft a single ideal output. This allows for more effective leveraging of human judgment.
+
+However, RLHF models are not strictly superior in all cases; they may lose some ``entropy'' compared to base models, leading to less diverse outputs. Base models, with their higher entropy, can be better suited for tasks requiring diverse suggestions (e.g., generating many unique Pokemon names).
+
+\subsubsection{Stage 3: Reward Modeling (RM)}
+
+\begin{itemize}
+    \item \textbf{Data Collection for RM}: The data for this stage consists of comparisons. The SFT model is used to generate multiple completions (e.g., three) for a given prompt. Human contractors then rank these completions based on quality. This ranking process can be very difficult and time-consuming for humans.
+    \item \textbf{Algorithm for RM}: This is framed as a classification task where the model learns to predict a ``reward'' score for a completion given a prompt.
+        \begin{itemize}
+            \item The prompt and each completion are laid out as input.
+            \item A special ``reward readout token'' is appended to the completion.
+            \item The Transformer is then supervised only at this single token position to predict a numerical reward value representing the completion's quality.
+            \item A loss function enforces consistency between the model's predicted rewards and the human-provided rankings.
+        \end{itemize}
+    \item \textbf{Output of RM}: A ``reward model'' that can score the quality of any arbitrary completion for any given prompt. This model is not deployable as an assistant itself but is crucial for the subsequent RL stage.
+\end{itemize}
+
+\subsubsection{Stage 4: Reinforcement Learning (RL)}
+
+\begin{itemize}
+    \item \textbf{Process}: In this stage, a large collection of prompts is used. The assistant model (initialized from the SFT model) generates completions for these prompts.
+        \begin{itemize}
+            \item For each completion, the pre-trained and fixed reward model assigns a quality score.
+            \item The standard language modeling loss function is applied to the tokens generated by the assistant model.
+            \item Critically, this language modeling objective is weighted by the rewards provided by the reward model.
+            \item Completions that receive high reward scores will have their constituent tokens reinforced (given higher probabilities for future generation). Conversely, tokens from low-scoring completions will have their probabilities reduced.
+            \item This process is repeated across many prompts and batches, iteratively improving the assistant model's ability to generate high-quality outputs according to the reward model.
+        \end{itemize}
+    \item \textbf{Output of RL}: A ``policy'' (the trained model) that consistently generates completions scoring high according to the reward model.
+\end{itemize}
+
+\subsubsection{Examples of Models and Their Training Stages}
+
+\begin{itemize}
+    \item \textbf{RLHF Models}: ChatGPT, GPT-4, Claude, GPT-3.5. These are typically preferred by humans.
+    \item \textbf{SFT Models}: Vicuna 13B, Koala.
+    \item \textbf{Base Models}: GPT-3 (DaVinci), LLaMA series.
+\end{itemize}
+Model performance rankings (e.g., Elo ratings) show GPT-4 as the most capable, followed by Claude and GPT-3.5.
+
+\subsection{Applying GPT Assistants Effectively}
+
+Effective application of GPT assistants requires understanding their inherent ``cognitive'' differences from human thought processes and leveraging prompt engineering and external tools to compensate.
+
+\subsubsection{Understanding the GPT ``Cognitive'' Model}
+
+A human's internal thought process for generating a sentence involves a rich internal monologue, tool use (e.g., Wikipedia, calculator), reflection, sanity checks, self-correction, and iterative refinement. In contrast, a GPT model is fundamentally a ``token simulator''.
+
+\begin{itemize}
+    \item GPTs process and generate text token by token, spending roughly the same amount of computational work per token.
+    \item Unlike humans, the training data for LLMs strips away all internal dialogue, so the models do not inherently reflect, sanity check, or correct their mistakes along the way. They simply try their best to imitate the next token.
+    \item \textbf{GPT Cognitive Advantages}:
+        \begin{itemize}
+            \item \textbf{Vast Factual Knowledge}: Possess a very large fact-based knowledge across numerous areas due to billions of parameters, acting as extensive storage for facts.
+            \item \textbf{Large, Perfect Working Memory (Context Window)}: Whatever fits into the context window is immediately and losslessly accessible to the Transformer through its internal self-attention mechanism. This is effectively a perfect, albeit finite, memory.
+        \end{itemize}
+\end{itemize}
+
+Prompting, to a large extent, serves to bridge this ``cognitive difference'' between human brains and LLM ``brains''.
+
+\subsubsection{Prompt Engineering Techniques for Enhanced Performance}
+
+These techniques are designed to elicit more deliberate and effective responses from LLMs.
+
+\paragraph{Spreading Out Reasoning (``Tokens to Think'')}
+LLMs need ``tokens to think''. They cannot perform complex reasoning per token and require the reasoning process to be spread out across more tokens.
+\begin{itemize}
+    \item \textbf{Show Your Work (Few-shot Prompting)}: Provide examples in the prompt that demonstrate a step-by-step reasoning process. The Transformer will imitate this template, leading to better results.
+    \item \textbf{``Let's think step by step''}: Adding this phrase to a prompt can condition the Transformer to show its work. This forces it to perform less computational work per token, resulting in slower but more successful reasoning.
+\end{itemize}
+
+\paragraph{Self-Consistency}
+LLMs can ``get unlucky'' and sample a suboptimal token, leading them down a ``blind alley'' in reasoning from which they cannot recover by default.
+\begin{itemize}
+    \item To mitigate this, sample multiple times for a given prompt.
+    \item Implement a process to identify and keep the best samples, or use a majority vote among the outputs.
+\end{itemize}
+
+\paragraph{Self-Correction / Reflection}
+Surprisingly, larger LLMs (like GPT-4) can often ``know'' when they have made a mistake, even if they don't correct it by default.
+\begin{itemize}
+    \item Explicitly ask the model: ``Did you meet the assignment?''.
+    \item For example, if asked to generate a non-rhyming poem that ends up rhyming, GPT-4 might admit it failed when prompted to check. Without this explicit instruction, it will not self-check.
+\end{itemize}
+
+\paragraph{Recreating ``System 2'' Thinking}
+Drawing a parallel to human cognition (System 1: fast, automatic; System 2: slower, deliberate planning), many prompt engineering techniques aim to induce ``System 2'' behavior in LLMs.
+\begin{itemize}
+    \item \textbf{Tree of Thought}: A recently developed technique that involves maintaining multiple completions for a given prompt and scoring them along the way, keeping only the promising paths. This is not just a simple prompt but requires ``python glue code'' to manage the tree search algorithm. This is analogous to Monte Carlo Tree Search used in systems like AlphaGo.
+    \item \textbf{ReAct (Reasoning and Acting)}: A method where the LLM's answer is structured as a sequence of ``thought, action, observation''. This allows the model to perform a full ``rollout'' of its thinking process and permits ``tool use'' within its actions.
+    \item \textbf{AutoGPT}: An inspirational project that enables an LLM to maintain a task list and recursively break down tasks. While not yet practical for real-world applications, it indicates the direction of research towards more autonomous agents.
+\end{itemize}
+
+\subsubsection{Asking for Success: Conditioning on High Performance}
+
+LLMs are trained on datasets containing a wide spectrum of quality (e.g., wrong student answers alongside expert solutions). By default, they aim to imitate all of this. To obtain high-quality output:
+\begin{itemize}
+    \item \textbf{Explicitly Ask for Quality}: Use phrases that condition the Transformer to aim for correctness and high performance. For example, ``Let's work this out in a step-by-step way to be sure we have the right answer'' has been shown to be very effective. This prevents the Transformer from hedging its probability mass on low-quality solutions.
+    \item \textbf{Role-playing}: Instruct the LLM to adopt a persona: ``You are a leading expert on this topic,'' or ``pretend you have IQ 120''. However, be cautious not to demand excessively high ``IQ'' (e.g., 400), as this might push the model out of its data distribution or into sci-fi/role-playing modes.
+\end{itemize}
+
+\subsubsection{Tool Use for LLMs}
+
+Just as humans rely on tools for tasks they aren't good at (e.g., calculators for complex arithmetic), LLMs can benefit from tool integration.
+\begin{itemize}
+    \item LLMs may not inherently ``know'' their weaknesses.
+    \item \textbf{Explicit Instructions}: Tell the Transformer when and how to use external tools. For instance, ``You are not very good at mental arithmetic. Whenever you need to do very large number addition/multiplication, instead use this calculator. Here's how you use the calculator: [token combination]''.
+    \item Tools can include calculators, code interpreters, and search engines.
+\end{itemize}
+
+\subsubsection{Retrieval Augmented Generation (RAG)}
+
+This approach combines the strengths of LLMs' extensive internal memory with external, retrieved information.
+\begin{itemize}
+    \item The context window of a Transformer acts as its perfect working memory. If relevant information is loaded into this memory, the model performs exceptionally well.
+    \item \textbf{RAG Recipe}:
+        \begin{enumerate}
+            \item Gather relevant documents.
+            \item Split documents into smaller chunks.
+            \item Embed all chunks into vector representations (embedding vectors).
+            \item Store these vectors in a vector store (e.g., a vector database).
+            \item At query time, use the user's query to fetch the most relevant chunks from the vector store.
+            \item ``Stuff'' these retrieved chunks into the LLM's prompt as additional context.
+            \item The LLM then generates a response using both its internal knowledge and the provided context.
+        \end{enumerate}
+    \item This mirrors how humans consult primary documents or textbooks when solving problems, rather than relying solely on memory. LlamaIndex is mentioned as a data connector for this purpose.
+\end{itemize}
+
+\subsubsection{Constraint Prompting}
+
+These techniques force LLMs to produce outputs in a specific, desired format.
+\begin{itemize}
+    \item \textbf{Guidance (Microsoft)}: An example of a library that enforces specific output structures, such as JSON. This is achieved by manipulating the probabilities of tokens during generation, allowing the Transformer to fill in the blanks while adhering to the specified form and potentially additional restrictions.
+\end{itemize}
+
+\subsubsection{Fine-tuning Models (Changing Weights)}
+
+While prompt engineering is powerful, fine-tuning offers another level of customization by directly changing the model's weights. This process has become more accessible recently.
+\begin{itemize}
+    \item \textbf{Parameter Efficient Fine-tuning (PEFT)}: Techniques like LoRA (Low-Rank Adaptation) allow for fine-tuning only small, sparse parts of the model while keeping most of the base model's weights fixed. This significantly reduces the cost and computational requirements of fine-tuning and allows for low-precision inference on the clamped parts.
+    \item \textbf{Open-Source Base Models}: The availability of high-quality open-source base models (e.g., LLaMA, though not commercially licensed) facilitates fine-tuning.
+    \item \textbf{Considerations for Fine-tuning}:
+        \begin{itemize}
+            \item \textbf{Technical Involvement}: Fine-tuning is technically more involved and requires greater expertise.
+            \item \textbf{Data Requirements}: It necessitates human data contractors for custom datasets or complex synthetic data pipelines.
+            \item \textbf{Iteration Cycle}: It significantly slows down the development and iteration cycle.
+            \item \textbf{SFT vs. RLHF Complexity}:
+                \begin{itemize}
+                    \item \textbf{Supervised Fine-tuning (SFT)}: Relatively straightforward, as it's essentially a continuation of the language modeling task.
+                    \item \textbf{Reinforcement Learning from Human Feedback (RLHF)}: Considered ``very much research territory,'' highly unstable, difficult to train, and not beginner-friendly. It is also still evolving rapidly. It is generally not advised for individuals to attempt rolling their own RLHF implementations.
+                \end{itemize}
+        \end{itemize}
+\end{itemize}
+
+\subsection{Recommendations for Achieving and Optimizing LLM Performance}
+
+\subsubsection{Achieve Top Performance (Primary Focus)}
+\begin{enumerate}
+    \item \textbf{Use the Most Capable Model}: Currently, this is GPT-4.
+    \item \textbf{Detailed and Informative Prompts}: Craft prompts with abundant task content, relevant information, and clear instructions. Think of it as providing instructions to a human contractor who cannot ask follow-up questions.
+    \item \textbf{Cater to LLM Psychology}: Remember that LLMs lack human qualities like inner monologue or inherent cleverness. Structure prompts to compensate for these differences.
+    \item \textbf{Retrieve and Add Context (RAG)}: Always provide any relevant external information to the prompt. Explore various prompt engineering techniques available online.
+    \item \textbf{Experiment with Few-Shot Examples}: Show, don't just tell. Providing examples helps the model understand the desired output format and behavior.
+    \item \textbf{Utilize Tools and Plugins}: Offload tasks that LLMs struggle with natively (e.g., calculations, code execution, search) to external tools.
+    \item \textbf{Implement Chains and Reflection}: Move beyond single prompt-answer interactions. Consider sequences of prompts, reflection steps, and generating multiple samples to select the best one.
+\end{enumerate}
+
+\subsubsection{Optimize Performance (Secondary Focus)}
+\begin{enumerate}
+    \item \textbf{Consider Fine-tuning (After Prompt Engineering)}: Once you've exhausted the capabilities of prompt engineering, investigate fine-tuning your model. Be prepared for a slower and more involved process.
+    \item \textbf{RLHF (Expert/Research Zone)}: While RLHF can yield better results than SFT, it is highly complex and difficult to implement successfully. It remains a research area.
+    \item \textbf{Cost Optimization}: To manage costs, explore using lower-capacity models or developing shorter, more efficient prompts.
+\end{enumerate}
+
+\subsection{Use Cases and Limitations of Current LLMs}
+
+\subsubsection{Current Limitations}
+
+It is critical to be aware of the significant limitations of LLMs today:
+\begin{itemize}
+    \item \textbf{Bias}: Models may exhibit biases present in their training data.
+    \item \textbf{Fabrication/Hallucination}: LLMs can generate factually incorrect or nonsensical information.
+    \item \textbf{Reasoning Errors}: They may make logical mistakes or struggle with complex reasoning.
+    \item \textbf{Application-Specific Struggles}: They may perform poorly in entire classes of applications.
+    \item \textbf{Knowledge Cutoffs}: Their knowledge is limited to their training data and does not include information after a certain date (e.g., September 2021 for some models).
+    \item \textbf{Vulnerability to Attacks}: LLMs are susceptible to various attacks, including prompt injection, jailbreak attacks (bypassing safety guardrails), and data poisoning.
+\end{itemize}
+
+\subsubsection{Recommended Use Cases}
+
+Given the current limitations, it is advised to use LLMs in specific ways:
+\begin{itemize}
+    \item \textbf{Low-Stakes Applications}: Employ LLMs where the consequences of errors are minimal.
+    \item \textbf{Human Oversight}: Always combine LLM usage with human review and oversight.
+    \item \textbf{Source of Inspiration/Suggestions}: Leverage them for brainstorming, generating ideas, or providing starting points.
+    \item \textbf{Co-pilots, Not Autonomous Agents}: View LLMs as assistive tools rather than fully autonomous agents performing tasks independently. The models are not yet at a stage for complete autonomy.
+\end{itemize}
+
+\subsection{Conclusion}
+
+GPT-4 is an impressive technological artifact with vast knowledge across many domains, capable of tasks like math and coding. A vibrant ecosystem of tools and applications is being built around these models, making their power increasingly accessible.
+
+The following Python code snippet demonstrates the simplicity of interacting with a GPT-4 assistant model via an API call:
+
+\begin{lstlisting}[caption={Basic GPT-4 API Interaction}]
+import openai
+
+# Replace with your actual API key
+openai.api_key = "YOUR_API_KEY"
+
+response = openai.chat.completions.create(
+    model="gpt-4",  # Or another model like "gpt-3.5-turbo"
+    messages=[
+        {"role": "user", "content": "Can you say something to inspire the audience of Microsoft Build 2023?"}
+    ]
+)
+
+print(response.choices[0].message.content)
+\end{lstlisting}
+
+This simple interaction allows users to leverage the capabilities of GPT-4 and receive a high-quality, inspiring response. The ecosystem surrounding these models is continuously evolving, offering powerful new possibilities for developers and users alike.

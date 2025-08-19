@@ -1,0 +1,538 @@
+% ====================================================================
+% LECTURE 7: Building GPT from Scratch
+% ====================================================================
+
+\section{Lecture 7: Building GPT from Scratch}
+
+\begin{abstract}
+This lecture provides a comprehensive guide to building a Generatively Pre-trained Transformer (GPT) from scratch. We explore the fundamental architecture behind Chat GPT and similar language models, implementing each component step-by-step. Starting with a simple bigram model as a baseline, we progressively build up to a full Transformer architecture, covering tokenization, self-attention mechanisms, multi-head attention, feed-forward networks, and the complete training pipeline. By the end, we'll have a working character-level language model trained on Shakespeare's works that demonstrates the core principles powering modern large language models.
+\end{abstract}
+
+\subsection{Introduction to Chat GPT and Language Models}
+
+By now, you've likely encountered Chat GPT, a system that has profoundly impacted the AI community and the world by enabling interaction with AI through text-based tasks. For instance, you can prompt Chat GPT to generate a haiku about the importance of understanding AI or even a humorous breaking news article about a leaf falling from a tree. A crucial characteristic to note is its \textit{probabilistic nature}: the system can produce slightly different, yet equally valid, outputs for the exact same prompt.
+
+Fundamentally, Chat GPT is what we call a \textbf{language model}. It excels at modeling sequences---whether of words, characters, or more generally, tokens---and understanding how these elements typically follow each other within a language like English. From its perspective, its primary role is to \textit{complete a sequence}: you provide the beginning, and it generates the continuation.
+
+\subsubsection{The Transformer Architecture: The Brain Behind GPT}
+
+The underlying neural network performing the heavy lifting for Chat GPT is the \textbf{Transformer architecture}. This groundbreaking architecture was first introduced in a seminal 2017 paper titled ``Attention Is All You Need''. The very acronym GPT---which stands for ``Generatively Pre-trained Transformer''---directly acknowledges this core component, with ``Transformer'' referring to the neural network. Although the Transformer was initially proposed and designed within the context of machine translation, its profound impact was unanticipated by its authors. Within five years, this architecture, with only minor modifications, was adopted and copy-pasted into a vast array of AI applications, fundamentally reshaping the field. At its core, it is the fundamental neural network driving Chat GPT.
+
+\subsubsection{Our Goal: Building a Character-Level Language Model}
+
+While Chat GPT is a highly sophisticated, production-grade system trained on a substantial portion of the internet and refined through intricate pre-training and fine-tuning stages, our objective in this lecture is more educational. We aim to build something \textit{like} Chat GPT, specifically a \textbf{Transformer-based language model} that operates at the \textbf{character level}. This scaled-down approach is incredibly insightful for understanding the internal workings of these powerful systems.
+
+Instead of a massive internet dataset, we will work with a smaller, more manageable collection of text: \textbf{Tiny Shakespeare}. This dataset comprises a concatenation of all of Shakespeare's works, contained within a single 1MB file. Our task will be to train a Transformer to model how these characters follow each other, enabling it to produce new character sequences that resemble Shakespearean language. For example, given a sequence like ``verily my lor'', the Transformer will learn to predict characters like ``d'' as the next likely element.
+
+\subsection{Data Preparation and Tokenization}
+
+Our initial step in building our character-level language model involves preparing the Tiny Shakespeare dataset for the neural network.
+
+\subsubsection{Loading and Inspecting the Data}
+
+The \texttt{tiny\_shakespeare.txt} file, which is about 1 megabyte in size, contains approximately 1 million characters. Before we dive into modeling, it's good practice to load and inspect the raw text.
+
+\begin{lstlisting}[caption={Loading and inspecting Tiny Shakespeare data}]
+import torch
+
+# Download the tiny shakespeare dataset if not already present
+# !wget https://raw.githubusercontent.com/karpathy/makemore/master/tinyshakespeare.txt
+with open('tinyshakespeare.txt', 'r', encoding='utf-8') as f:
+    text = f.read()
+
+print(f"Length of dataset in characters: {len(text)}")
+# Expected output: Length of dataset in characters: 1115394
+
+print(text[:1000])  # Print the first 1000 characters to get a feel for the data
+# Expected output will be the beginning of Shakespeare's text.
+\end{lstlisting}
+
+\subsubsection{Vocabulary and Character-Level Tokenization}
+
+To process the text with a neural network, we need to convert it into a numerical representation. First, we identify all unique characters present in the dataset to form our \textbf{vocabulary}. For a character-level model, each of these unique characters will be treated as an individual element (or token) in our sequences.
+
+\begin{lstlisting}[caption={Creating vocabulary and sorting characters}]
+chars = sorted(list(set(text)))  # Get unique characters and sort them
+vocab_size = len(chars)          # Determine the size of our vocabulary
+print(''.join(chars))
+# Example output: !$&',-.3:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+print(f"Vocabulary size: {vocab_size}")
+# Example output: Vocabulary size: 65 (indicating 65 unique characters)
+\end{lstlisting}
+
+\paragraph{Tokenization Strategy}
+
+\textbf{Tokenization} is the process of converting raw text (a string) into a sequence of integers based on a predefined vocabulary of possible elements. Different strategies exist:
+\begin{itemize}
+    \item \textbf{Character-level tokenization}: This is the simplest approach, directly translating individual characters into integers. While straightforward and using a small vocabulary, it results in very long sequences of integers. This is the method we will adopt for our educational model.
+    \item \textbf{Subword tokenization}: This is widely used in practice by models like GPT. Techniques like Google's SentencePiece or OpenAI's Byte Pair Encoding (BPE), implemented in their \texttt{tiktoken} library, tokenize text into subword units rather than whole words or individual characters. This strikes a balance, offering a larger vocabulary (e.g., 50,000 tokens for GPT-2) and shorter integer sequences compared to character-level models.
+    \item \textbf{Word-level tokenization}: This approach encodes entire words into integers.
+\end{itemize}
+
+For our character-level language model, we'll implement a simple encoder-decoder pair:
+
+\begin{lstlisting}[caption={Character-level encoder and decoder}]
+stoi = {ch:i for i,ch in enumerate(chars)}  # Map character to integer (string-to-integer)
+itos = {i:ch for i,ch in enumerate(chars)}  # Map integer to character (integer-to-string)
+encode = lambda s: [stoi[c] for c in s]     # Encoder function: takes a string, returns a list of integers
+decode = lambda l: ''.join([itos[i] for i in l])  # Decoder function: takes a list of integers, returns a string
+
+print(encode("hi there"))
+# Example output: (These are the integer representations of 'h', 'i', ' ', 't', 'h', 'e', 'r', 'e')
+print(decode(encode("hi there")))
+# Example output: hi there (Demonstrates the reversible nature of encoding/decoding)
+\end{lstlisting}
+
+\paragraph{Encoding the Entire Dataset}
+
+Once our encoder is defined, we apply it to the entire Tiny Shakespeare text to transform it into a single, massive sequence of integers, which is then wrapped in a PyTorch tensor.
+
+\begin{lstlisting}[caption={Encoding the full dataset into a PyTorch tensor}]
+data = torch.tensor(encode(text), dtype=torch.long)  # Encode the entire text and convert to a PyTorch tensor
+print(data.shape, data.dtype)
+# Example output: torch.Size([1115394]) torch.int64 (A 1D tensor of 1.1 million 64-bit integers)
+print(data[:1000])  # Display the first 1000 encoded characters
+\end{lstlisting}
+
+\subsubsection{Train and Validation Split}
+
+A standard practice in machine learning is to separate the dataset into training and validation sets. The \textbf{training data} (90\% in our case) is used to teach the model, while the \textbf{validation data} (the remaining 10\%) is held back and used to assess the model's performance on unseen examples. This helps us understand the extent to which our model might be \textit{overfitting} (memorizing the training data too well) versus truly learning generalizable patterns to produce ``Shakespeare-like'' text.
+
+\begin{lstlisting}[caption={Splitting data into train and validation sets}]
+n = int(0.9*len(data))  # Calculate the split point for 90% training data
+train_data = data[:n]   # The first 90% of the data
+val_data = data[n:]     # The last 10% of the data
+\end{lstlisting}
+
+\subsection{Batching and Context Length}
+
+When training a Transformer, it's computationally prohibitive and inefficient to feed the entire text dataset into the model at once. Instead, we work with smaller, manageable segments of the data, referred to as ``chunks'' or ``blocks''.
+
+\subsubsection{Block Size and Multiple Examples}
+
+The \texttt{block\_size} (also known as \texttt{context\_length}) dictates the maximum number of characters the Transformer will consider as context when making a prediction. Each sampled chunk of data, specifically \texttt{block\_size + 1} characters long, effectively contains \textit{multiple independent examples} packed within it. For instance, if \texttt{block\_size} is 8, a 9-character chunk ($X = [c_1, c_2, \ldots, c_9]$) will yield 8 input-target pairs:
+\begin{itemize}
+    \item Input: $[c_1]$, Target: $c_2$
+    \item Input: $[c_1, c_2]$, Target: $c_3$
+    \item \ldots
+    \item Input: $[c_1, c_2, \ldots, c_8]$, Target: $c_9$
+\end{itemize}
+This strategy is not just for efficiency; it's crucial for training the Transformer to be adept at predicting the next character from contexts of varying lengths, from as little as one character up to the full \texttt{block\_size}. This versatility is particularly useful during inference, where generation might begin with minimal context.
+
+\subsubsection{Batch Dimension for Parallel Processing}
+
+To maximize the utilization of modern parallel computing hardware, particularly GPUs, we process multiple \texttt{chunks} simultaneously. These multiple chunks are stacked together into a single tensor, forming a \textbf{batch}. Each chunk within a batch is processed completely independently, with no communication between them.
+
+\begin{lstlisting}[caption={Function to get a batch of data}]
+# --- Hyperparameters for batching ---
+batch_size = 4  # Number of independent sequences processed in parallel
+block_size = 8  # Maximum context length for predictions
+
+# --- Function to retrieve a batch ---
+def get_batch(split):
+    data = train_data if split == 'train' else val_data  # Select data based on split
+    # Generate `batch_size` random starting indices within the selected data
+    # ensuring there's enough room for a `block_size + 1` chunk
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    
+    # Stack the input chunks (first `block_size` characters)
+    x = torch.stack([data[i:i+block_size] for i in ix])
+    # Stack the target chunks (characters offset by one from inputs)
+    y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    return x, y
+
+# --- Example of retrieving and inspecting a batch ---
+xb, yb = get_batch('train')
+print('Inputs (xb):')
+print(xb.shape)  # Expected output: torch.Size([4, 8]) (batch_size, block_size)
+print(xb)
+print('Targets (yb):')
+print(yb.shape)  # Expected output: torch.Size([4, 8]) (batch_size, block_size)
+print(yb)
+\end{lstlisting}
+
+The \texttt{xb} (inputs) tensor will have a shape of \texttt{(batch\_size, block\_size)}, and \texttt{yb} (targets) will have the same shape, serving as the desired next characters for each position in \texttt{xb}. A 4x8 batch, for instance, contains a total of 32 independent input-target examples for the model to learn from.
+
+\subsection{The Bigram Language Model (Baseline)}
+
+To begin our modeling journey, we'll implement the simplest possible neural network for language modeling: the \textbf{Bigram language model}. This model makes a prediction for the next character based solely on the identity of the single \textit{current} character.
+
+\subsubsection{Model Architecture: \texttt{nn.Embedding}}
+
+The core component of our Bigram model is an embedding table, implemented using PyTorch's \texttt{nn.Embedding} module.
+\begin{itemize}
+    \item \texttt{nn.Embedding(num\_embeddings, embedding\_dim)}: For a Bigram model, \texttt{num\_embeddings} is set to \texttt{vocab\_size} (our 65 unique characters), and \texttt{embedding\_dim} is also set to \texttt{vocab\_size}.
+    \item When an integer representing a character (from our input \texttt{idx}) is passed to this embedding table, it acts as an index to ``pluck out'' a corresponding row (vector) from the table.
+    \item The output, which we call \texttt{logits}, will have a shape of \texttt{(Batch, Time, Channels)}. In this context, \texttt{Channels} refers to the \texttt{vocab\_size}, representing the scores for each possible next character in our vocabulary.
+\end{itemize}
+
+\begin{lstlisting}[caption={BigramLanguageModel class}]
+import torch.nn as nn
+from torch.nn import functional as F
+
+class BigramLanguageModel(nn.Module):
+    def __init__(self, vocab_size):
+        super().__init__()
+        # Each token directly reads off the logits for the next token from a lookup table.
+        # This table is essentially a `vocab_size x vocab_size` matrix.
+        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+
+    def forward(self, idx, targets=None):
+        # `idx` (inputs) and `targets` are both (B,T) tensors of integers.
+        # `idx` represents the current batch of input sequences.
+        logits = self.token_embedding_table(idx)  # Output shape: (B, T, C), where C is vocab_size
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            # Reshape `logits` for `F.cross_entropy`. PyTorch's cross_entropy
+            # expects predictions in a 2D format (N, C) or (B, C, T) for higher dimensions.
+            # We flatten B*T positions into N, keeping C (channel/vocab_size) as the second dimension.
+            logits = logits.view(B*T, C)
+            # Flatten `targets` to match the `logits`'s first dimension.
+            targets = targets.view(B*T)
+            # Calculate the cross-entropy loss between predicted logits and actual targets.
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens):
+        # `idx` is a (B, T) array of indices representing the current context (input sequence).
+        for _ in range(max_new_tokens):
+            # 1. Get predictions (logits) from the model based on the current context (`idx`).
+            # We only need the forward pass here; loss is not computed as there are no ground truth targets.
+            logits, loss = self(idx) 
+            
+            # 2. Focus only on the last time step (`-1` index in the `T` dimension).
+            # These are the predictions for the very next token in each sequence in the batch.
+            logits = logits[:, -1, :]  # Output shape: (B, C)
+            
+            # 3. Apply softmax to convert logits (raw scores) into probabilities.
+            # `dim=-1` ensures softmax is applied across the vocabulary dimension for each batch element.
+            probs = F.softmax(logits, dim=-1)  # Output shape: (B, C)
+            
+            # 4. Sample the next token from the probability distribution.
+            # `torch.multinomial` draws `num_samples=1` from each row of `probs`.
+            idx_next = torch.multinomial(probs, num_samples=1)  # Output shape: (B, 1)
+            
+            # 5. Append the sampled index (`idx_next`) to the running sequence (`idx`).
+            # `dim=1` concatenates along the time dimension, extending the context.
+            idx = torch.cat((idx, idx_next), dim=1)  # Output shape: (B, T+1)
+        return idx
+\end{lstlisting}
+
+\subsubsection{Loss Function and Initial State}
+
+To evaluate the quality of our model's predictions, we use the \textbf{Cross-Entropy Loss}. This is a common choice for classification problems and is equivalent to the negative log-likelihood loss. Intuitively, this loss function encourages the model to assign high scores (logits) to the correct next character.
+
+For a completely random model with a vocabulary size of 65 characters, the expected negative log-likelihood loss (if it's predicting uniformly) would be $\ln(\text{vocab\_size})$, or $\ln(65) \approx 4.17$. An observed initial loss of approximately $4.87$ for our untrained model indicates that its initial predictions are not perfectly uniform; there's a slight bias, but it's still largely guessing incorrectly, as expected for an uninitialized network.
+
+\subsubsection{Generation from the Model}
+
+The \texttt{generate} function facilitates the model's ability to produce new text sequences. It takes a starting sequence (e.g., a single token representing a newline character, \texttt{idx = torch.zeros((1, 1), dtype=torch.long)}) and iteratively extends it for a specified number of \texttt{max\_new\_tokens}.
+
+When run with an untrained Bigram model, the generated text is expectedly ``garbage'' (random characters), as the model has not yet learned any patterns from the Shakespeare data.
+
+\subsection{The Core of Transformer: Self-Attention}
+
+The Bigram model's limitation lies in its inability for tokens to ``talk to each other'' and consider broader context. This is precisely the problem that \textbf{Self-Attention} is designed to solve. It enables tokens within a sequence to weigh the importance of other tokens when processing their own information, thereby building a richer, context-aware representation.
+
+\subsubsection{Mathematical Trick: Efficient Weighted Aggregation}
+
+Self-attention leverages a clever mathematical trick to efficiently perform weighted aggregations (or weighted sums/averages) of elements from the past within a sequence. The fundamental idea is that each token should gather information from all preceding tokens in its context, but crucially, it must \textit{not} access information from future tokens in an auto-regressive (next-token prediction) scenario.
+
+\begin{enumerate}
+    \item \textbf{Simple Averaging (Bag of Words)}: A naive starting point would be to simply average the feature vectors of all preceding tokens. This crude form of interaction is highly ``lossy'' regarding spatial arrangement but provides a basic form of communication.
+    
+    \item \textbf{Matrix Multiplication for Weighted Sums}: The same weighted aggregation can be performed vastly more efficiently using matrix multiplication with a special lower-triangular matrix.
+    
+    \begin{lstlisting}[caption={Efficient weighted aggregation using lower-triangular matrix}]
+    # For a given sequence length T (e.g., 8, which is our block_size)
+    # Create a T x T matrix of ones
+    weights_matrix = torch.ones(T, T)
+    # Convert it into a lower-triangular matrix (elements above the main diagonal become zero)
+    weights_matrix = torch.tril(weights_matrix)
+    # Normalize each row so that its elements sum to 1. This makes the matrix multiplication
+    # perform an average of the corresponding rows from the input.
+    weights_matrix = weights_matrix / weights_matrix.sum(1, keepdim=True)
+    
+    # When this `weights_matrix` (T, T) is matrix-multiplied with our input `x` (B, T, C)
+    # using batched matrix multiplication, PyTorch automatically handles the batch dimension.
+    # The operation becomes: `output = weights_matrix @ x`
+    \end{lstlisting}
+
+    \item \textbf{Masked Softmax for Affinities}: The most sophisticated approach, used in self-attention, involves producing a ``weights'' matrix where elements reflect ``affinities'' or ``interaction strengths''. This is achieved by:
+    \begin{itemize}
+        \item Initializing a scores matrix (e.g., with zeros).
+        \item Applying a lower-triangular mask, setting elements corresponding to future tokens to negative infinity (\texttt{float('-inf')}). This ensures these positions receive zero weight after softmax, effectively preventing future communication.
+        \item Applying \texttt{softmax} along the last dimension (each row). \texttt{softmax(negative\_infinity)} evaluates to zero, so the masked elements become zero probabilities. The other elements become probabilities that sum to one, representing how much attention (weight) to give to each past token.
+    \end{itemize}
+    
+    \begin{lstlisting}[caption={Masked softmax for attention weights}]
+    # For a sequence length T (e.g., block_size)
+    raw_affinities = torch.zeros((T, T))  # Placeholder for initial interaction strengths
+    # Create the lower-triangular mask, which is `1` for current/past, `0` for future.
+    tril = torch.tril(torch.ones(T, T))
+    # Apply the mask: set values where `tril` is 0 (i.e., future positions) to negative infinity.
+    # This ensures they get 0 probability after softmax.
+    masked_affinities = raw_affinities.masked_fill(tril == 0, float('-inf'))
+    # Apply softmax along the last dimension to normalize affinities into probabilities (weights).
+    attention_weights = F.softmax(masked_affinities, dim=-1)  # Each row sums to 1
+    
+    # This `attention_weights` matrix will then be used in a batched matrix multiplication
+    # with the input `x` to perform a weighted aggregation: `output = attention_weights @ x`.
+    \end{lstlisting}
+    
+    Crucially, in a full self-attention mechanism, these \texttt{raw\_affinities} will not be constant zeros. Instead, they will be \textit{data-dependent}, meaning their values will be dynamically computed based on how interesting tokens find each other.
+\end{enumerate}
+
+\subsubsection{Token and Positional Embeddings}
+
+For the Transformer, the input tokens undergo two types of embedding to create a rich representation:
+\begin{enumerate}
+    \item \textbf{Token Embeddings}: Similar to our Bigram model, each character's identity is mapped to a vector. However, the \texttt{embedding\_dim} is now a separate hyperparameter, \texttt{n\_embed} (e.g., 32), which defines the dimensionality of the token's content representation.
+    \item \textbf{Positional Embeddings}: Attention mechanisms inherently process sets of vectors without any built-in sense of order or position. To inject this crucial spatial information, a separate \texttt{nn.Embedding} table is created for positions. This table maps each numerical position (from 0 up to \texttt{block\_size - 1}) to a unique embedding vector.
+\end{enumerate}
+
+These two embedding vectors (token and positional) are then simply \textit{added} together for each token. This element-wise addition creates a combined representation, \texttt{x}, that contains both the semantic content of the token and its sequential position.
+
+\begin{lstlisting}[caption={Token and Positional Embeddings in the LanguageModel}]
+class LanguageModel(nn.Module):
+    def __init__(self, vocab_size, n_embed, block_size):
+        super().__init__()
+        # Token embedding table: maps each character ID to an `n_embed`-dimensional vector
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        # Positional embedding table: maps each position ID (0 to block_size-1)
+        # to an `n_embed`-dimensional vector
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        # The final linear layer (language modeling head) projects `n_embed` back to `vocab_size` for logits
+        self.lm_head = nn.Linear(n_embed, vocab_size) 
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape  # Get batch size (B) and sequence length (T) from input `idx`
+
+        # 1. Generate token embeddings based on the character IDs in `idx`
+        token_embeddings = self.token_embedding_table(idx)  # Shape: (B, T, n_embed)
+        
+        # 2. Generate positional embeddings for the current sequence length `T`
+        # `torch.arange(T, device=device)` creates a sequence of integers [0, 1, ..., T-1]
+        position_embeddings = self.position_embedding_table(torch.arange(T, device=device))  # Shape: (T, n_embed)
+        
+        # 3. Add token and positional embeddings. PyTorch's broadcasting ensures
+        # the (T, n_embed) position_embeddings are added to each (T, n_embed) slice across the batch.
+        x = token_embeddings + position_embeddings  # Shape: (B, T, n_embed)
+        
+        # In a complete Transformer, `x` would then be fed into self-attention and feed-forward blocks.
+        # For this simplified illustration, it goes directly to the language modeling head.
+        logits = self.lm_head(x)  # Output shape: (B, T, vocab_size)
+        
+        # (Loss calculation logic would be similar to the Bigram model, using `logits` and `targets`)
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+\end{lstlisting}
+
+\subsubsection{Query, Key, Value (QKV) Mechanism in a Single Head}
+
+This is truly the ``crux'' of how self-attention works. For every single token (or ``node'') within a sequence, at each position, the model generates three distinct vectors through linear transformations applied to its combined token+positional embedding (\texttt{x}):
+\begin{itemize}
+    \item \textbf{Query (Q)}: Conceptually, this vector represents ``what am I looking for?''. It's the ``question'' a token asks of all other tokens.
+    \item \textbf{Key (K)}: This vector represents ``what information do I contain?''. It's the ``answer'' a token offers to other tokens' queries.
+    \item \textbf{Value (V)}: This vector represents ``what information should I communicate (or pass along) if another token finds my key interesting?''. It's the actual content that gets aggregated.
+\end{itemize}
+
+The communication happens when \textbf{affinities} (or raw attention scores) between tokens are calculated. This is done by taking the \textbf{dot product of Queries and Keys}. If a query vector is ``aligned'' with a key vector (i.e., they are similar in direction and magnitude), their dot product will be high, indicating a strong affinity or mutual interest.
+
+\begin{lstlisting}[caption={Single Self-Attention Head implementation}]
+class Head(nn.Module):
+    def __init__(self, head_size, n_embed, block_size, dropout_rate):
+        super().__init__()
+        # Linear layers to project input `x` into Key, Query, and Value vectors
+        # Bias is typically set to False for these projections in Transformers
+        self.key = nn.Linear(n_embed, head_size, bias=False)
+        self.query = nn.Linear(n_embed, head_size, bias=False)
+        self.value = nn.Linear(n_embed, head_size, bias=False)
+        
+        # `tril` (lower triangular mask) is a buffer, not a trainable parameter.
+        # It's registered so it moves with the module to the correct device.
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        
+        self.head_size = head_size  # Store head_size for scaling
+        self.dropout = nn.Dropout(dropout_rate)  # Dropout layer
+
+    def forward(self, x):
+        B, T, C = x.shape  # Get batch size, sequence length, and embedding dimension
+        k = self.key(x)    # (B, T, head_size) - Keys for all tokens in batch/sequence
+        q = self.query(x)  # (B, T, head_size) - Queries for all tokens in batch/sequence
+        
+        # 1. Compute attention scores (affinities): Query @ Key^T
+        # `(q @ k.transpose(-2, -1))` performs batched matrix multiplication.
+        # Output shape: (B, T, T). Each (i,j) entry is affinity of query_i with key_j.
+        # 2. Apply scaling: Divide by square root of head_size to control variance.
+        att = (q @ k.transpose(-2, -1)) * (self.head_size**-0.5) 
+        
+        # 3. Apply masking: Set affinities to future tokens to -infinity.
+        # `self.tril[:T, :T]` ensures the mask adapts to the current sequence length `T`.
+        att = att.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
+        
+        # 4. Apply softmax: Normalize affinities into probability distribution (attention weights).
+        att = F.softmax(att, dim=-1)  # (B, T, T) - rows sum to 1
+        
+        # 5. Apply dropout: Randomly drop some connections (regularization).
+        att = self.dropout(att)
+
+        v = self.value(x)  # (B, T, head_size) - Values for all tokens
+        
+        # 6. Perform weighted aggregation: Attention_weights @ Values
+        # Output shape: (B, T, head_size) - contextualized representation for each token
+        out = att @ v 
+        return out
+\end{lstlisting}
+
+\subsection{Building the Full Transformer Block}
+
+A complete Transformer architecture is not just a single attention head. It intersperses powerful communication mechanisms (attention) with local, per-token computation (feed-forward networks). These components are then structured within ``blocks'' that can be stacked to form a deep network.
+
+\subsubsection{Multi-Head Attention}
+
+Instead of relying on a single attention head to capture all necessary relationships, \textbf{Multi-Head Attention} runs multiple attention ``heads'' in parallel. Each individual head computes its own set of Q, K, and V projections, calculates its own attention scores, and aggregates its own values.
+
+\begin{lstlisting}[caption={MultiHeadAttention implementation}]
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size, n_embed, block_size, dropout_rate):
+        super().__init__()
+        # Create a list of `Head` modules, each performing a single attention operation.
+        self.heads = nn.ModuleList([Head(head_size, n_embed, block_size, dropout_rate) for _ in range(num_heads)])
+        # A linear projection layer to combine the outputs of the multiple heads
+        # It takes `num_heads * head_size` (which should equal `n_embed`) and projects it back to `n_embed`.
+        self.proj = nn.Linear(num_heads * head_size, n_embed) 
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        # 1. Run each attention head in parallel and collect their outputs.
+        # Each h(x) produces (B, T, head_size).
+        # 2. Concatenate the outputs of all heads along the last dimension (channel dimension).
+        # Resulting shape: (B, T, num_heads * head_size), which is (B, T, n_embed).
+        out = torch.cat([h(x) for h in self.heads], dim=-1) 
+        # 3. Apply the projection layer to the concatenated output.
+        out = self.proj(out)
+        # 4. Apply dropout for regularization.
+        out = self.dropout(out)
+        return out
+\end{lstlisting}
+
+\subsubsection{Feed-Forward Network (FFN)}
+
+After tokens have communicated and gathered contextual information through the attention mechanism, they need an opportunity to ``think'' or process that newly integrated information individually. This is the role of the \textbf{Feed-Forward Network} (also known as a Position-Wise Feed-Forward Network or a simple Multi-Layer Perceptron).
+
+\begin{lstlisting}[caption={FeedFoward implementation}]
+class FeedFoward(nn.Module):
+    def __init__(self, n_embed, dropout_rate):
+        super().__init__()
+        self.net = nn.Sequential(
+            # First linear layer: expands dimensionality by a factor of 4 (as is common in Transformers)
+            nn.Linear(n_embed, 4 * n_embed),
+            nn.ReLU(),  # Non-linearity (GELU is also common, especially in OpenAI models)
+            # Second linear layer: projects dimensionality back to `n_embed`
+            nn.Linear(4 * n_embed, n_embed), 
+            nn.Dropout(dropout_rate),  # Dropout for regularization
+        )
+
+    def forward(self, x):
+        # The network operates independently on each token's embedding (B, T, n_embed)
+        return self.net(x)
+\end{lstlisting}
+
+\subsubsection{Residual Connections and Layer Normalization}
+
+For training very deep neural networks, crucial architectural innovations are the use of \textbf{residual connections} (also known as \textbf{skip connections}) and \textbf{layer normalization}.
+
+\textbf{Residual connections} establish a direct ``superhighway'' for gradients to flow unimpeded from the loss function all the way back to the input. The idea is that the main computational blocks (like Multi-Head Attention or the Feed-Forward Network) ``fork off'' from a main residual pathway, perform their transformation on the input \texttt{x}, and then their output is \textit{added} back to the original \texttt{x} (\texttt{x = x + module(x)}).
+
+\textbf{Layer Normalization} ensures that the inputs to subsequent layers maintain a stable distribution (e.g., zero mean and unit variance) during training, especially at initialization. A common and often more stable practice in modern Transformers is the ``pre-norm'' formulation, applying Layer Normalization \textit{before} the subsequent transformation rather than after the residual connection.
+
+A full Transformer block, integrating Multi-Head Attention, a Feed-Forward Network, Residual Connections, and Layer Normalization (using the pre-norm formulation), looks like this:
+
+\begin{lstlisting}[caption={Transformer Block implementation (\texttt{Block} class)}]
+class Block(nn.Module):
+    def __init__(self, n_embed, num_heads, block_size, dropout_rate):
+        super().__init__()
+        # Calculate head_size for each attention head
+        head_size = n_embed // num_heads 
+        
+        # Multi-Head Self-Attention layer
+        self.sa = MultiHeadAttention(num_heads, head_size, n_embed, block_size, dropout_rate)
+        # Feed-Forward Network
+        self.ffwd = FeedFoward(n_embed, dropout_rate)
+        
+        # Layer Normalization layers (pre-norm formulation)
+        self.ln1 = nn.LayerNorm(n_embed)  # Applied before Multi-Head Attention
+        self.ln2 = nn.LayerNorm(n_embed)  # Applied before Feed-Forward Network
+
+    def forward(self, x):
+        # Apply Layer Norm 1, then Multi-Head Self-Attention, then add residual connection
+        x = x + self.sa(self.ln1(x)) 
+        # Apply Layer Norm 2, then Feed-Forward Network, then add residual connection
+        x = x + self.ffwd(self.ln2(x)) 
+        return x
+\end{lstlisting}
+
+\subsection{Scaling Up the Model and Results}
+
+With all the core Transformer components in place (token/positional embeddings, scaled multi-head attention, feed-forward networks, residual connections, layer normalization, and dropout), we can now significantly scale up our model to observe its full potential on the Tiny Shakespeare dataset.
+
+\subsubsection{Hyperparameter Scaling}
+
+To push performance, we increase several hyperparameters, making the network considerably larger and more capable:
+\begin{itemize}
+    \item \texttt{batch\_size}: Increased from 4 to \textbf{64}.
+    \item \texttt{block\_size}: Increased from 8 to \textbf{256}, allowing the model to process and learn from much longer contexts.
+    \item \texttt{n\_embed}: The embedding dimension, increased from 32 to \textbf{384}. This makes the internal representations richer.
+    \item \texttt{num\_heads}: Increased to \textbf{6}. With \texttt{n\_embed = 384}, each head will have a \texttt{head\_size} of $384 / 6 = 64$ dimensions.
+    \item \texttt{n\_layer}: The number of Transformer \texttt{Block} layers, set to \textbf{6}. This creates a deeper network.
+    \item \texttt{dropout}: Set to \textbf{0.2}, meaning 20\% of intermediate calculations are randomly dropped during training.
+    \item \texttt{learning\_rate}: Slightly reduced because larger neural networks are often more sensitive to high learning rates.
+\end{itemize}
+
+\subsubsection{Performance Improvement}
+
+After training with these scaled-up parameters (which might take about 15 minutes on a powerful A100 GPU, or longer on less capable hardware), the results are significantly improved. The validation loss drops to approximately \textbf{1.48}, a substantial decrease from the 2.07-2.08 range observed with earlier, smaller models.
+
+The generated text becomes far more coherent and recognizable as Shakespearean, despite remaining semantically nonsensical. The model learns to mimic the style, sentence structure, and vocabulary patterns of Shakespeare's works with impressive fidelity. For instance, it might produce phrases like ``is every crimp tap be a house'' or ``Oho sent me you mighty Lord,'' which superficially resemble English but lack logical meaning. This demonstrates the model's ability to ``blabber on in Shakespeare-like manner''.
+
+\subsection{GPT: A Decoder-Only Transformer}
+
+The Transformer model we have meticulously built is a \textbf{decoder-only Transformer}. This specific architecture means it fundamentally lacks two key components present in the original Transformer paper's full diagram: an ``encoder'' part and ``cross-attention'' blocks within its layers. Our model's blocks solely consist of self-attention and feed-forward networks.
+
+The original ``Attention Is All You Need'' paper introduced the Transformer for \textit{machine translation}. For this task, an \textbf{encoder-decoder architecture} is essential:
+\begin{itemize}
+    \item \textbf{Encoder}: This part processes the input sequence (e.g., a French sentence). Crucially, the encoder blocks allow all tokens within the input sequence to communicate freely with each other (no triangular masking) to build a rich representation of the source sentence's content.
+    \item \textbf{Decoder}: This part generates the output sequence (e.g., an English translation) in an auto-regressive fashion, meaning it predicts one token at a time. Like our model, it uses a triangular mask within its self-attention to prevent looking into the future. However, an encoder-decoder Transformer's decoder blocks also contain \textbf{cross-attention} layers. These cross-attention layers allow the decoder to ``condition'' its generation on the rich, encoded context provided by the encoder's output.
+\end{itemize}
+
+Our model, like OpenAI's GPT series, is a \textbf{decoder-only} Transformer because it is designed for \textbf{unconditioned text generation} (language modeling). It doesn't receive an external prompt to translate or condition upon; it simply learns to generate text that imitates the patterns of its training data. The presence of the triangular mask in its attention mechanisms makes it a ``decoder'' because it maintains the auto-regressive property, allowing it to predict subsequent tokens sequentially.
+
+\subsection{Conclusion}
+
+In this comprehensive lecture, we have meticulously explored and implemented a \textbf{decoder-only Transformer} from scratch, mirroring the fundamental architecture of Generative Pre-trained Transformer (GPT) models as laid out in the seminal 2017 ``Attention Is All You Need'' paper. We successfully trained this model on the modest Tiny Shakespeare dataset, achieving sensible and increasingly coherent results that mimic the style of the input text.
+
+Through this hands-on construction, we gained deep insights into the core components of the Transformer:
+\begin{itemize}
+    \item The critical role of \textbf{token and positional embeddings} in providing both content and sequential information to the model.
+    \item The intricate mechanics of \textbf{self-attention}, including the Query-Key-Value (QKV) mechanism, the importance of \textbf{scaled attention} for stable training, and the application of \textbf{causal masking} for auto-regressive generation.
+    \item The power of \textbf{multi-head attention} in enabling diverse communication channels between tokens.
+    \item The function of \textbf{feed-forward networks} for per-token computation.
+    \item The crucial role of \textbf{residual connections} and \textbf{layer normalization} in ensuring the optimizability and stability of deep neural networks.
+    \item The utility of \textbf{dropout} as a regularization technique to prevent overfitting.
+\end{itemize}
+
+All the core training code we developed is remarkably compact, typically around 200 lines. While our model is a ``baby GPT'' compared to the colossal scale of models like GPT-3 (which are 10,000 to a million times larger depending on how you measure parameters and data), the underlying architectural principles we've implemented are nearly identical.
+
+It's important to reiterate that this lecture primarily focused on the \textbf{pre-training stage} of large language models. We did not delve into the subsequent, equally complex \textbf{fine-tuning stages} that are essential for aligning these models to specific tasks, such as generating answers to questions, detecting sentiment, or engaging in coherent dialogue (as seen in Chat GPT). These advanced stages often involve sophisticated techniques like supervised fine-tuning, reward model training, and reinforcement learning from human feedback (RLHF).

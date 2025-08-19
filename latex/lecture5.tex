@@ -1,0 +1,292 @@
+% ====================================================================
+% LECTURE 5: Building makemore Part 4 - Becoming a Backprop Ninja
+% ====================================================================
+
+\section{Lecture 5: Building makemore Part 4 - Becoming a Backprop Ninja}
+
+\begin{abstract}
+In the journey of implementing the \texttt{makemore} neural network, we've successfully built a multi-layer perceptron (MLP) and achieved reasonable loss values. A crucial line of code that orchestrates the learning process is \texttt{loss.backward()}, which relies on PyTorch's automatic differentiation engine (autograd) to compute gradients. While convenient, this lecture emphasizes the profound importance of understanding and manually implementing the backward pass at the tensor level, rather than relying solely on the framework's abstraction. We will demystify backpropagation by implementing it step-by-step, from atomic operations to analytical derivations for cross-entropy and batch normalization.
+\end{abstract}
+
+\subsection{Introduction: Demystifying Backpropagation}
+
+Andrej Karpathy refers to backpropagation as a ``leaky abstraction''. This means that while it seems to magically make neural networks work, it's not a foolproof mechanism. A lack of understanding of its internals can lead to significant issues, such as suboptimal performance or outright failures, making debugging a formidable challenge.
+
+Understanding manual backpropagation provides several key benefits:
+\begin{itemize}
+    \item \textbf{Debugging Capabilities}: It empowers you to debug neural networks effectively. Common issues like dying gradients (due to saturated activations), dead neurons, or exploding/vanishing gradients (especially in recurrent neural networks) require a deep understanding of how gradients are calculated and flow through the network.
+    \item \textbf{Avoiding Subtle Bugs}: Unbeknownst to many, even experienced developers can introduce subtle but major bugs if they don't grasp backpropagation. An example includes misinterpreting gradient clipping as loss clipping, which can inadvertently set gradients of outliers to zero, effectively ignoring them.
+    \item \textbf{Full Explicitness}: Manually writing the backward pass removes the ``magic'' and makes every calculation explicit, fostering confidence and clarity in the network's behavior.
+    \item \textbf{Enhanced Debugging Skills}: This exercise hones your ability to debug complex systems, translating to stronger overall development skills.
+    \item \textbf{Deeper Intuition}: It cultivates a profound intuition about how gradients flow backward from the loss function through all intermediate tensors and ultimately to the network's parameters.
+\end{itemize}
+
+\subsubsection{A Historical Perspective}
+
+While today, manually writing the backward pass is typically reserved for educational purposes, approximately ten years ago, it was the pervasive standard in deep learning. Developers, including Andrej Karpathy himself, routinely implemented their backward passes by hand. Early libraries, such as those written in Matlab for Restricted Boltzmann Machines around 2010, explicitly managed gradients inline without widespread use of autograd engines. Even in 2014, with the advent of Python and NumPy for deep learning, it was common practice to implement both the forward pass and the backward pass manually, often using gradient checkers to verify numerical and analytical gradient agreement.
+
+\subsection{Lecture Setup and Objectives}
+
+Our objective is to replace the \texttt{loss.backward()} call in our existing two-layer MLP (which includes a batch normalization layer) with a manually implemented backward pass at the tensor level.
+
+\subsubsection{MLP Architecture Recap}
+Our current MLP is structured as:
+\begin{itemize}
+    \item Embedding layer for characters.
+    \item First linear layer.
+    \item Batch Normalization layer.
+    \item Tanh activation function.
+    \item Second linear layer.
+    \item Cross-entropy loss function.
+\end{itemize}
+The forward pass will remain largely identical, but the backward pass will be entirely manual.
+
+\subsubsection{Key Setup Elements}
+\begin{enumerate}
+    \item \textbf{Gradient Comparison Utility (\texttt{cmp})}: A utility function is introduced to compare our manually calculated gradients (\texttt{dt}) with those computed by PyTorch's autograd (\texttt{t.grad}). It checks for exact and approximate equality (accounting for floating-point inaccuracies) and reports the maximum difference.
+    \item \textbf{Parameter Initialization}: Biases are initialized with small random numbers instead of exact zeros. This is a deliberate choice to prevent masking potential errors in gradient calculations, as zero-initialized variables can sometimes simplify gradient expressions in a way that hides bugs. A spurious bias (\texttt{B1}) is also added before batch normalization in the first layer, just to ensure its gradient can be correctly calculated, even though it's typically unnecessary.
+    \item \textbf{Expanded Forward Pass}: The forward pass is broken down into more explicit, manageable chunks with many intermediate tensors (e.g., \texttt{logprobs}, \texttt{probs}, \texttt{counts}). This is essential because we will be calculating derivatives for each of these intermediate tensors in the backward pass.
+    \item \textbf{Gradient Naming Convention}: For every intermediate tensor \texttt{X} in the forward pass, its corresponding gradient (derivative of the loss with respect to \texttt{X}) will be named \texttt{dX} (e.g., \texttt{dlogprobs} for \texttt{logprobs}).
+\end{enumerate}
+
+\subsubsection{Exercise Breakdown}
+The lecture is structured around four main exercises:
+\begin{enumerate}
+    \item \textbf{Exercise 1: Atomic Backpropagation}: Manually backpropagate through every single atomic operation in the forward pass, step-by-step. This involves calculating all the \texttt{dX} variables and verifying them with PyTorch's \texttt{autograd} using the \texttt{cmp} function.
+    \item \textbf{Exercise 2: Analytical Cross-Entropy Backprop}: Derive and implement a single, efficient analytical formula for the backward pass through the cross-entropy loss, rather than breaking it into atomic operations.
+    \item \textbf{Exercise 3: Analytical Batch Normalization Backprop}: Similarly, derive and implement a single, efficient analytical formula for the backward pass through the entire batch normalization layer.
+    \item \textbf{Exercise 4: Full Manual Training Loop}: Integrate the manual backward passes (including the analytically derived ones from Exercises 2 and 3) into the full training loop, replacing \texttt{loss.backward()} entirely.
+\end{enumerate}
+
+\subsection{Exercise 1: Atomic Backpropagation Through the Graph}
+
+We begin by manually calculating the gradients for each intermediate tensor, starting from the loss and working backward to the inputs and parameters.
+
+\subsubsection{Backpropagating Through Loss Calculation (\texttt{logprobs} to \texttt{loss})}
+The loss is defined as the negative mean of selected log probabilities:
+\begin{lstlisting}[caption={Loss Calculation}]
+loss = -logprobs[range(N), YB].mean()
+\end{lstlisting}
+Here, \texttt{N} is the batch size, and \texttt{YB} contains the correct indices for each example in the batch.
+
+\textbf{Derivation of \texttt{dlogprobs}}:
+If \texttt{loss = -(A + B + C) / 3} for three numbers, then $\frac{dL}{dA} = -\frac{1}{3}$.
+Generalizing for \texttt{N} numbers (our batch size, e.g., 32), the derivative of the loss with respect to each \textit{participating} \texttt{logprob} element is $-\frac{1}{N}$.
+For all other \texttt{logprob} elements that do not participate in the loss calculation (because they were not indexed by \texttt{YB}), their gradient with respect to the loss is intuitively zero, as changing them would not change the loss.
+
+\begin{lstlisting}[caption={Calculating dlogprobs}]
+# dlogprobs (32, 27)
+dlogprobs = torch.zeros_like(logprobs)
+dlogprobs[range(N), YB] = -1.0 / N
+cmp('logprobs', dlogprobs, logprobs)
+\end{lstlisting}
+
+\subsubsection{Backpropagating Through Log (\texttt{probs} to \texttt{logprobs})}
+The \texttt{logprobs} are calculated by taking the element-wise logarithm of \texttt{probs}:
+\begin{lstlisting}[caption={Logprobs Calculation}]
+logprobs = torch.log(probs)
+\end{lstlisting}
+
+\textbf{Derivation of \texttt{dprobs}}:
+The local derivative of $\log(x)$ with respect to $x$ is $\frac{1}{x}$. Applying the chain rule, we multiply the local derivative by the incoming gradient (\texttt{dlogprobs}).
+Intuitively, this step boosts the gradients for examples where the assigned probability of the correct character (\texttt{probs}) was very low. If \texttt{probs} is close to zero, $\frac{1}{\text{probs}}$ becomes very large, amplifying the gradient signal.
+
+\begin{lstlisting}[caption={Calculating dprobs}]
+# dprobs (32, 27)
+dprobs = (1.0 / probs) * dlogprobs
+cmp('probs', dprobs, probs)
+\end{lstlisting}
+
+\subsubsection{Backpropagating Through Normalization (\texttt{counts}, \texttt{count\_sum\_inv} to \texttt{probs})}
+The \texttt{probs} are obtained by an element-wise multiplication of \texttt{counts} and \texttt{count\_sum\_inv}:
+\begin{lstlisting}[caption={Probabilities Calculation}]
+probs = counts * count_sum_inv
+\end{lstlisting}
+Here, \texttt{counts} has shape (32, 27) and \texttt{count\_sum\_inv} has shape (32, 1). This implies an implicit broadcasting: \texttt{count\_sum\_inv} (a column tensor) is replicated 27 times horizontally to align with \texttt{counts} for element-wise multiplication.
+
+\textbf{Derivation of \texttt{dcount\_sum\_inv}}:
+If $C = A \times B$ (scalar multiplication), then $\frac{dC}{dB} = A$. So, $\frac{d(\text{probs})}{d(\text{count\_sum\_inv})} = \text{counts}$ (local derivative for element-wise multiplication).
+Applying the chain rule: \texttt{dcount\_sum\_inv = counts * dprobs}.
+However, because \texttt{count\_sum\_inv} was replicated horizontally in the forward pass, its gradient must be the sum of all the gradients it contributed to. This means summing horizontally across dimension 1, while retaining the dimension to maintain the (32, 1) shape.
+
+\begin{lstlisting}[caption={Calculating dcount\_sum\_inv}]
+# dcount_sum_inv (32, 1)
+dcount_sum_inv = (counts * dprobs).sum(dim=1, keepdim=True)
+cmp('count_sum_inv', dcount_sum_inv, count_sum_inv)
+\end{lstlisting}
+
+\textbf{Derivation of \texttt{dcounts} (first branch)}:
+Similarly, for $\frac{d(\text{probs})}{d(\text{counts})} = \text{count\_sum\_inv}$ (local derivative).
+Applying the chain rule: \texttt{dcounts = count\_sum\_inv * dprobs}. No additional summation is required here as \texttt{count\_sum\_inv} broadcasts correctly.
+
+\begin{lstlisting}[caption={Calculating dcounts (partial)}]
+# dcounts (32, 27)
+dcounts = count_sum_inv * dprobs
+# Note: This is only a partial derivative, dcounts will be updated later
+\end{lstlisting}
+
+\subsubsection{Backpropagating Through Linear Layer 2 (\texttt{H}, \texttt{W2}, \texttt{B2} to \texttt{logits})}
+The \texttt{logits} are the result of a matrix multiplication of \texttt{H} and \texttt{W2}, followed by an addition of \texttt{B2} (bias):
+\begin{lstlisting}[caption={Linear Layer 2 Calculation}]
+logits = H @ W2 + B2
+\end{lstlisting}
+Shapes: \texttt{H} (32, 64), \texttt{W2} (64, 27), \texttt{B2} (27,). \texttt{H @ W2} results in (32, 27). \texttt{B2} broadcasts from (27,) to (1, 27) then vertically to (32, 27).
+
+\textbf{Backpropagation Rules for Matrix Multiplication and Bias:}
+Deriving these rules from first principles by writing out a small example $D = A @ B + C$ and applying scalar chain rule for each element reveals a pattern:
+\begin{itemize}
+    \item \textbf{Derivative with respect to \texttt{A} (\texttt{dH})}: $\frac{dL}{dA} = \frac{dL}{dD} @ B^T$.
+        \begin{itemize}
+            \item In our case: \texttt{dH = dlogits @ W2.T}.
+            \item Dimension matching: \texttt{dlogits} (32, 27) @ \texttt{W2.T} (27, 64) $\rightarrow$ (32, 64), which matches \texttt{H}'s shape.
+        \end{itemize}
+    \item \textbf{Derivative with respect to \texttt{B} (\texttt{dW2})}: $\frac{dL}{dB} = A^T @ \frac{dL}{dD}$.
+        \begin{itemize}
+            \item In our case: \texttt{dW2 = H.T @ dlogits}.
+            \item Dimension matching: \texttt{H.T} (64, 32) @ \texttt{dlogits} (32, 27) $\rightarrow$ (64, 27), which matches \texttt{W2}'s shape.
+        \end{itemize}
+    \item \textbf{Derivative with respect to \texttt{C} (\texttt{dB2})}: $\frac{dL}{dC}$ (for broadcasted bias) is the sum of $\frac{dL}{dD}$ across the broadcasted dimension.
+        \begin{itemize}
+            \item In our case: \texttt{dB2 = dlogits.sum(dim=0)}.
+            \item Dimension matching: \texttt{dlogits} (32, 27) summed over \texttt{dim=0} (examples) $\rightarrow$ (27,), which matches \texttt{B2}'s shape.
+        \end{itemize}
+\end{itemize}
+
+\begin{lstlisting}[caption={Calculating dH, dW2, dB2}]
+# dH (32, 64), dW2 (64, 27), dB2 (27,)
+dH = dlogits @ W2.T
+dW2 = H.T @ dlogits
+dB2 = dlogits.sum(dim=0)
+cmp('H', dH, H)
+cmp('W2', dW2, W2)
+cmp('B2', dB2, B2)
+\end{lstlisting}
+
+\subsection{Exercise 2: Analytical Cross-Entropy Backward Pass}
+
+While the atomic backpropagation is good for understanding, it's often inefficient. For certain common operations, like cross-entropy loss, an analytical derivation of the gradient can result in a much simpler and faster backward pass.
+
+\subsubsection{Mathematical Derivation of \texttt{dlogits} for Cross-Entropy}
+The cross-entropy loss (for a single example) is given by:
+$$L = -\log P_Y$$
+where $P_Y$ is the probability of the correct label $Y$, computed via softmax on the logits:
+$$P_i = \frac{e^{L_i}}{\sum_j e^{L_j}}$$
+
+We are interested in $\frac{\partial L}{\partial L_i}$, the derivative of the loss with respect to each logit $L_i$.
+The derivation distinguishes two cases:
+\begin{itemize}
+    \item If $i = Y$ (the correct label): $\frac{\partial L}{\partial L_Y} = P_Y - 1$
+    \item If $i \neq Y$ (any other label): $\frac{\partial L}{\partial L_i} = P_i$
+\end{itemize}
+This can be concisely stated as $\frac{\partial L}{\partial L_i} = P_i - \mathbb{I}(i=Y)$, where $\mathbb{I}$ is the indicator function.
+For a batch, the total loss is the mean of individual losses, so the gradients must also be scaled by $\frac{1}{N}$.
+
+\begin{lstlisting}[caption={Analytical dlogits for Cross-Entropy}]
+# dlogits (32, 27)
+dlogits = F.softmax(logits, dim=1)  # Calculate P (probabilities)
+dlogits[range(N), YB] -= 1          # Subtract 1 at the correct label positions
+dlogits /= N                        # Scale by 1/N for the mean loss
+cmp('logits', dlogits, logits)
+\end{lstlisting}
+
+\subsubsection{Intuition of \texttt{dlogits} in Cross-Entropy}
+The \texttt{dlogits} gradient carries a profound intuitive meaning. If we visualize \texttt{dlogits}, we see that:
+\begin{itemize}
+    \item For incorrect character positions, the gradient values are proportional to their predicted probabilities ($P_i$). These are ``pulling down'' forces.
+    \item For the correct character position ($Y$), the gradient is $P_Y - 1$. Since $P_Y$ is usually less than 1 (unless perfect prediction), this is a negative value, representing a ``pulling up'' force.
+    \item The sum of gradients across each row (for each example) is zero (\texttt{sum(dlogits)} is 0). This signifies that the ``push'' on incorrect probabilities is perfectly balanced by the ``pull'' on the correct probability.
+    \item The magnitude of the gradient (the push/pull force) is proportional to how much the network \textit{mispredicted}. If a character was confidently mispredicted, the corresponding negative gradient on that incorrect logit would be large, and the positive gradient on the correct logit would be equally large to compensate.
+\end{itemize}
+This dynamic push-pull mechanism, driven by cross-entropy, is what efficiently guides the neural network's training.
+
+\subsection{Exercise 3: Analytical Batch Normalization Backward Pass}
+
+Similar to cross-entropy, batch normalization's backward pass can be significantly simplified through analytical derivation. This exercise focuses on deriving \texttt{dH\_PBN} from \texttt{dH\_preact}, ignoring the derivatives for \texttt{BN\_gain} and \texttt{BN\_bias} for simplicity, as they are straightforward.
+
+\subsubsection{Mathematical Derivation of \texttt{dH\_PBN}}
+The forward pass of batch normalization (simplified, ignoring $\gamma$ and $\beta$) can be expressed as:
+\begin{align}
+\mu &= \frac{1}{N} \sum_j X_j \\
+\sigma^2 &= \frac{1}{N-1} \sum_j (X_j - \mu)^2 \\
+\hat{X}_i &= \frac{X_i - \mu}{\sqrt{\sigma^2 + \epsilon}} \\
+Y_i &= \gamma \hat{X}_i + \beta \quad \text{(We are ignoring } \gamma \text{ and } \beta \text{ in this derivation, so } Y_i \approx \hat{X}_i\text{)}
+\end{align}
+
+We have $\frac{\partial L}{\partial Y_i}$ (which is \texttt{dH\_preact}) and want to find $\frac{\partial L}{\partial X_i}$ (which is \texttt{dH\_PBN}).
+The computational graph shows that each $X_i$ influences $Y_i$ directly through $\hat{X}_i$, and indirectly through $\mu$ and $\sigma^2$.
+
+The final analytical expression for $\frac{\partial L}{\partial X_i}$ (which maps to \texttt{dH\_PBN} for each column in the batch) is complex but much more efficient than the atomic step-by-step approach.
+
+\begin{lstlisting}[caption={Analytical dH\_PBN for Batch Normalization}]
+# dH_PBN (32, 64)
+# Complex analytical formula implementation
+dBN_diff_sum = dBN_diff.sum(dim=0)
+dBN_diff_mul_dBN_raw = (dBN_diff * BN_raw).sum(dim=0)
+dBN_var_inv_cubed = (bn_var + 1e-5)**(-1.5)
+dH_PBN = dBN_diff * BN_var_inv - (dBN_diff_sum * BN_var_inv + 
+         dBN_diff_mul_dBN_raw * dBN_var_inv_cubed * BN_diff) / N
+cmp('hpreact', dH_PBN, h_preact)
+\end{lstlisting}
+
+\subsection{Exercise 4: Full Training Loop with Manual Backpropagation}
+
+The final exercise integrates all the manually derived backward passes (including the analytical ones for cross-entropy and batch normalization) into the full neural network training loop.
+
+\subsubsection{Putting It All Together}
+The process involves:
+\begin{enumerate}
+    \item Re-initializing the neural network parameters from scratch.
+    \item Replacing \texttt{loss.backward()} with the sequential calls to our manually implemented gradient calculations (\texttt{dlogprobs} all the way back to \texttt{dC}).
+    \item Disabling PyTorch's autograd for the parameter update step using \texttt{with torch.no\_grad():} to improve efficiency, as we are managing gradients manually.
+    \item Updating the parameters using our manually computed \texttt{grad} values (e.g., \texttt{p.data += -learning\_rate * grad}). The parameters and their respective gradients are zipped together for this update.
+    \item Calibrating the running mean and variance for batch normalization after the training loop.
+\end{enumerate}
+
+\subsubsection{Results and Significance}
+When the full training loop with manual backpropagation runs, it achieves a loss very similar to, if not identical to, what would be obtained using PyTorch's \texttt{loss.backward()}. The model also produces similarly decent samples.
+
+\textbf{The key takeaway is that the entire backward pass for this neural network, incorporating the simplified analytical expressions for cross-entropy and batch normalization, can be implemented in approximately 20 lines of code.} This demonstrates complete visibility and control over the network's gradient computation, removing the ``black box'' nature of autograd.
+
+\begin{lstlisting}[caption={Manual Backward Pass (Simplified View of Exercise 4 Block)}]
+# Full manual backward pass (conceptual structure)
+# Replace loss.backward() with this block
+dlogprobs = ...  # (Analytical from Exercise 2)
+dprobs = ...
+dcount_sum_inv = ...
+dcount_sum = ...
+dcounts = ...
+dnorm_logits = ...
+dlogits = ...    # (Analytical from Exercise 2)
+dH, dW2, dB2 = ...
+dH_preact = ...
+dBN_gain, dBN_raw, dBN_bias = ...
+dBN_diff, dBN_var_inv = ...
+dBN_var = ...
+dBN_diff_2 = ...
+dBN_diff = ...
+dH_PBN = ...     # (Analytical from Exercise 3)
+dM_cat, dW1, dB1 = ...
+dM = ...
+dC = ...
+
+# Store gradients in a list in parameter order
+grads = [dC, dW1, dB1, dBN_gain, dBN_bias, dW2, dB2]
+
+# Parameter update loop
+with torch.no_grad():
+    for p, grad in zip(parameters, grads):
+        p.data += -learning_rate * grad
+\end{lstlisting}
+
+\subsection{Conclusion}
+
+This lecture provides a comprehensive understanding of how backward passes are implemented and how gradients flow through a neural network. By manually deriving and implementing the gradients for diverse layers, including matrix multiplications, element-wise operations, activations, and complex layers like cross-entropy and batch normalization, we gain invaluable intuition into the mechanics of neural network training.
+
+While in practical deep learning applications, automatic differentiation frameworks like PyTorch's \texttt{autograd} are the go-to tools for their efficiency and convenience, understanding the underlying manual backward pass is crucial for:
+\begin{itemize}
+    \item \textbf{Effective Debugging}: When models don't learn as expected, this knowledge is indispensable for pinpointing issues related to gradient flow (e.g., vanishing/exploding gradients, dead neurons).
+    \item \textbf{Custom Layers and Operations}: If you need to implement custom layers or operations that \texttt{autograd} doesn't natively support, you'll have the skills to write their backward passes.
+    \item \textbf{Deeper Understanding}: It transforms backpropagation from a ``magical black box'' into a transparent, understandable process, fostering a more robust foundation in deep learning.
+\end{itemize}
+
+This journey from \texttt{loss.backward()} to a fully manual, yet efficient, backpropagation implementation is a significant step towards becoming a ``backprop ninja''. The next lecture will delve into more complex architectures, such as Recurrent Neural Networks (RNNs) and LSTMs.
