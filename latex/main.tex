@@ -1,0 +1,197 @@
+\documentclass[11pt]{article}
+
+% ====================================================================
+% PACKAGE IMPORTS - Enhanced mathematical typesetting and formatting
+% ====================================================================
+
+% Core mathematical packages
+\usepackage{amsmath}        % Enhanced math environments
+\usepackage{amssymb}        % Mathematical symbols 
+\usepackage{amsthm}         % Theorem environments
+\usepackage{mathtools}      % Advanced math tools
+\usepackage{bm}            % Bold math symbols
+
+% Code listing packages
+\usepackage{listings}       % Code listings
+\usepackage{xcolor}         % Enhanced color support
+
+% Document layout and formatting
+\usepackage{geometry}       % Page geometry control
+\usepackage{fancyhdr}       % Custom headers and footers
+\usepackage{titlesec}       % Section title formatting
+\usepackage{tocloft}        % Table of contents formatting
+\usepackage{enumitem}       % Enhanced list formatting
+\usepackage{xcolor}         % Color support
+
+% Hyperlinks (load last to avoid conflicts)
+\usepackage{hyperref}       % PDF hyperlinks and bookmarks
+
+% ====================================================================
+% CODE LISTING CONFIGURATION
+% ====================================================================
+
+% Define Python language for listings
+\lstdefinelanguage{Python}{
+  keywords={True, False, None, and, or, not, break, continue, for, while, if, elif, else, def, class, return, try, except, finally, import, from, as, with, assert, pass, del, global, nonlocal, lambda, yield},
+  keywordstyle=\color{blue}\bfseries,
+  identifierstyle=\color{black},
+  sensitive=false,
+  comment=[l]{\#},
+  commentstyle=\color{gray}\ttfamily,
+  string=[b]",
+  string=[b]',
+  stringstyle=\color{red}\ttfamily,
+  morecomment=[s]{"""}{"""},
+  morecomment=[s]{'''}{'''},
+  emph={self, other, data, grad, _prev, _op, _backward, __init__, __repr__, __add__, __mul__, __pow__, __neg__, __sub__, __rmul__, __truediv__, exp, tanh, parameters, Neuron, Layer, MLP, __call__, backward, build_topo, zero_grad},
+  emphstyle=\color{magenta},
+  ndkeywords={Value, math, np, plt, torch, random},
+  ndkeywordstyle=\color{teal},
+  literate={-}{-}{1} {+}{+}{1} {*}{\textasteriskcentered}{1} {=}{=}{1} {/}{\slash}{1}
+}
+
+% Listing style configuration
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  frameround=ffff,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  showspaces=false,
+  showtabs=false,
+  tabsize=2,
+  captionpos=b,
+  xleftmargin=0.5cm,
+  xrightmargin=0.5cm,
+  aboveskip=1em,
+  belowskip=1em,
+  commentstyle=\color{gray},
+  stringstyle=\color{red},
+  keywordstyle=\color{blue},
+  identifierstyle=\color{black},
+  numberbychapter=false
+}
+
+% Page setup
+\geometry{
+    a4paper,
+    left=1.2in,
+    right=1.2in,
+    top=1.2in,
+    bottom=1.2in,
+    headheight=14pt
+}
+
+% Header and footer styling
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textit{Neural Networks and Deep Learning}}
+\fancyhead[R]{\textit{Karpathy Lectures}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Section styling
+\titleformat{\section}
+{\Large\bfseries\color{blue!70!black}}
+{\thesection}
+{1em}
+{}
+
+\titleformat{\subsection}
+{\large\bfseries\color{blue!60!black}}
+{\thesubsection}
+{1em}
+{}
+
+\titleformat{\subsubsection}
+{\normalsize\bfseries\color{blue!50!black}}
+{\thesubsubsection}
+{1em}
+{}
+
+% Enhanced list formatting
+\setlist[enumerate]{itemsep=2pt, parsep=2pt}
+\setlist[itemize]{itemsep=2pt, parsep=2pt}
+
+% Theorem environments
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{example}{Example}[section]
+
+% ====================================================================
+% CUSTOM COMMANDS - Semantic mathematical notation
+% ====================================================================
+
+% Matrix and vector notation
+\newcommand{\mat}[1]{\bm{#1}}              % Bold matrices: \mat{A}
+\newcommand{\vecb}[1]{\bm{#1}}             % Bold vectors: \vecb{x}
+
+% Common mathematical objects
+\newcommand{\R}{\mathbb{R}}                 % Real numbers
+\newcommand{\transpose}{^{\mathrm{T}}}      % Transpose notation
+
+% Neural network specific commands
+\newcommand{\loss}{\mathcal{L}}             % Loss function
+\newcommand{\grad}{\nabla}                  % Gradient operator
+\newcommand{\sigmoid}{\sigma}               % Sigmoid function
+\newcommand{\relu}{\text{ReLU}}             % ReLU activation
+\newcommand{\softmax}{\text{softmax}}       % Softmax function
+
+% Hyperref setup (should be last)
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=blue!70!black,
+    bookmarksdepth=3
+}
+
+% Title page information
+\title{
+    \vspace{-1in}
+    \huge\textbf{Neural Networks and Deep Learning}\\
+    \Large\textbf{Lecture Notes}\\
+    \vspace{0.5cm}
+    \large Based on Andrej Karpathy's Lectures
+}
+\author{
+    \large Andrej Karpathy\\
+    \normalsize OpenAI / Tesla
+}
+\date{\large\today}
+
+\begin{document}
+
+% Custom title page
+\maketitle
+\thispagestyle{empty}
+
+\vfill
+\begin{center}
+\large
+These notes are based on Andrej Karpathy's lectures on neural networks\\
+and deep learning fundamentals.\\
+\vspace{0.5cm}
+\textit{``The goal is to build a strong foundation in neural networks\\
+by implementing everything from scratch and understanding the math.''}
+\end{center}
+\vfill
+
+\newpage
+
+% Table of Contents
+\tableofcontents
+\newpage
+
+% Include individual lecture files
+\input{lecture1}
+% Add more lectures as you create them:
+% \input{lecture2}
+% \input{lecture3}
+% \input{problemset_1}
+
+\end{document}
