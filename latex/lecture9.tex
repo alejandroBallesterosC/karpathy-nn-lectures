@@ -1,0 +1,266 @@
+% ====================================================================
+% LECTURE 9: The GPT Tokenizer
+% ====================================================================
+
+\section{Lecture 9: The GPT Tokenizer}
+
+\begin{abstract}
+This lecture provides an in-depth exploration of tokenization, the critical process of converting raw text into sequences of discrete integers (tokens) that can be processed by large language models (LLMs). We will examine the evolution from naive character-level tokenization to sophisticated subword tokenization schemes like Byte Pair Encoding (BPE), explore the architecture and training of modern tokenizers, and discuss the various challenges that arise from tokenization in practical LLM applications.
+\end{abstract}
+
+\subsection{Introduction to Tokenization}
+
+Tokenization is the indispensable process of converting raw text (strings) into sequences of discrete integers, known as tokens, which can then be fed into large language models (LLMs). Conversely, it also allows for the translation of token sequences back into human-readable text. While fundamental, tokenization is a source of many "hidden foot guns" and "oddness" observed in LLMs.
+
+\subsubsection{Why is Tokenization Necessary?}
+LLMs are mathematical models that operate on numerical data. Text, as a string of characters, cannot be directly processed by these models. Therefore, a translation layer is required.
+
+\subsubsection{Naive Character-Level Tokenization}
+In simple, early implementations, tokenization can occur at the character level. For instance, in an early GPT-from-scratch build, a vocabulary of 65 possible characters was created from a Shakespeare dataset. Each character was mapped to a unique integer (token ID).
+
+\begin{lstlisting}[caption={Character-level tokenization example}]
+# Example (conceptual, based on source description)
+text = "Hello there"
+vocab = sorted(list(set(text))) 
+char_to_int = {char: i for i, char in enumerate(vocab)}
+int_to_char = {i: char for i, char in enumerate(vocab)}
+
+tokens = [char_to_int[c] for c in text]
+print(f"Text: '{text}'")
+print(f"Tokens: {tokens}")
+\end{lstlisting}
+
+These integer tokens are then used as lookups into an embedding table. This table contains trainable parameters (vectors) for each token, which are then fed into the Transformer neural network.
+
+\subsubsection{Limitations of Naive Character-Level Tokenization}
+While simple, character-level tokenization is highly inefficient for modern LLMs. A sequence of 1,000 characters would become 1,000 tokens. More importantly, state-of-the-art models require more complex schemes that operate on "chunks" of characters, rather than individual ones.
+
+\subsection{The Need for Subword Tokenization: Beyond Raw Bytes}
+
+To understand modern tokenization, we must first appreciate how text is represented digitally and the challenges involved.
+
+\subsubsection{Unicode and Code Points}
+Python strings are immutable sequences of Unicode code points. The Unicode standard defines roughly 150,000 characters across 161 scripts, mapping each character to an integer code point.
+
+\begin{lstlisting}[caption={Getting Unicode Code Points in Python}]
+# Example Unicode code points
+print(ord('H'))      # Output: 72
+print(ord('e'))      # Output: 101  
+print(ord('A'))      # Output: 65
+
+# You cannot get code points for strings with multiple characters directly
+# print(ord("hello")) # This would cause an error
+\end{lstlisting}
+
+Using raw Unicode code points directly as tokens would result in a vocabulary of 150,000, which is very large. Furthermore, the Unicode standard is continuously evolving, making it an unstable representation for direct use as tokens.
+
+\subsubsection{Encodings: UTF-8, UTF-16, UTF-32}
+Unicode text is translated into binary data (byte streams) using encodings like UTF-8, UTF-16, and UTF-32.
+\begin{itemize}
+    \item \textbf{UTF-8}: By far the most common encoding. It's a variable-length encoding where each Unicode code point translates to 1 to 4 bytes. A major advantage is its backward compatibility with ASCII.
+    \item \textbf{UTF-16} and \textbf{UTF-32}: These are often more wasteful for simple ASCII/English characters due to the padding with zero bytes.
+\end{itemize}
+
+\begin{lstlisting}[caption={Encoding a string to bytes using UTF-8}]
+text = "Hello there"
+encoded_bytes_list = list(text.encode('utf-8'))
+print(f"UTF-8 encoded bytes for '{text}': {encoded_bytes_list}")
+\end{lstlisting}
+
+\subsubsection{Limitations of Raw Byte-Level Tokenization}
+If we were to use the raw bytes of UTF-8 directly as tokens, the vocabulary size would be limited to 256 (0-255 possible byte values). While this yields a tiny embedding table, it results in extremely long token sequences for any meaningful text. This is computationally inefficient for Transformers, which have finite context lengths.
+
+Therefore, a better solution is needed to support larger, tunable vocabulary sizes while still leveraging the efficiency of UTF-8 encoding. This leads us to the Byte Pair Encoding algorithm.
+
+\subsection{Byte Pair Encoding (BPE) Algorithm}
+
+The Byte Pair Encoding (BPE) algorithm is a data compression technique that allows us to achieve a variable amount of compression on byte sequences. It's a cornerstone of modern tokenizer training.
+
+\subsubsection{Core Idea}
+BPE works by iteratively identifying the most frequently occurring pair of adjacent tokens in a sequence and replacing that pair with a single, new token that is appended to the vocabulary. This process is repeated until a desired vocabulary size or number of merges is reached.
+
+\begin{itemize}
+    \item \textbf{Starting Point}: We begin with individual bytes as our initial tokens, giving a vocabulary size of 256.
+    \item \textbf{Iteration}: In each step, the algorithm finds the most frequent consecutive pair of tokens, mints a new token ID, and replaces all occurrences of the identified pair with the new token.
+    \item \textbf{Result}: This process results in a compressed training dataset and a learned algorithm (the set of merges) for encoding and decoding any arbitrary sequence.
+\end{itemize}
+
+\subsubsection{Implementation Details}
+Let's consider the core functions for BPE.
+
+\paragraph{Finding the Most Common Pair}
+This function iterates through a list of integers (tokens) and counts the occurrences of all consecutive pairs.
+
+\begin{lstlisting}[caption={Function to get pair statistics}]
+def get_stats(ids):
+    counts = {}
+    for i in range(len(ids) - 1):
+        pair = (ids[i], ids[i+1])
+        counts[pair] = counts.get(pair, 0) + 1
+    return counts
+
+# Example: Most common pair (101, 32) occurred 20 times.
+# Chr(101) is 'e', Chr(32) is ' ' (space). So, 'e ' is very common.
+\end{lstlisting}
+
+\paragraph{Merging a Pair}
+This function takes a list of token IDs, the specific pair to merge, and the new index (token ID) for the merged pair.
+
+\begin{lstlisting}[caption={Function to merge a pair}]
+def merge(ids, pair, idx):
+    newids = []
+    i = 0
+    while i < len(ids):
+        if i < len(ids) - 1 and ids[i] == pair[0] and ids[i+1] == pair[1]:
+            newids.append(idx)
+            i += 2
+        else:
+            newids.append(ids[i])
+            i += 1
+    return newids
+\end{lstlisting}
+
+\paragraph{Training Loop}
+The training process involves repeatedly calling \texttt{get\_stats} to find the most frequent pair and then \texttt{merge} to incorporate it into the token sequence and vocabulary.
+
+\begin{lstlisting}[caption={BPE Training Loop (Conceptual)}]
+# Initial tokens (e.g., UTF-8 bytes of text)
+text = "Some long text from a blog post."
+tokens = list(text.encode('utf-8')) # Initial 256 byte tokens
+
+# Desired vocabulary size (e.g., 20 merges for a 256 + 20 = 276 vocab)
+desired_vocab_size = 276
+num_merges = desired_vocab_size - 256
+
+merges = {} # (pair_child1, pair_child2) -> new_token_id
+vocab = {idx: bytes([idx]) for idx in range(256)} # For decoding later
+
+for i in range(num_merges):
+    stats = get_stats(tokens)
+    if not stats:
+        break # No more pairs to merge
+    top_pair = max(stats, key=stats.get) # Find most frequent pair
+    new_idx = 256 + i # Assign new token ID
+    tokens = merge(tokens, top_pair, new_idx) # Merge in the sequence
+    merges[top_pair] = new_idx # Record the merge
+    vocab[new_idx] = vocab[top_pair[0]] + vocab[top_pair[1]] # Update vocab
+    print(f"Merging {top_pair} into {new_idx}. New sequence length: {len(tokens)}")
+\end{lstlisting}
+
+\subsection{Tokenizer as a Separate Entity}
+
+A crucial concept is that the tokenizer is a completely separate component from the LLM itself.
+\begin{itemize}
+    \item \textbf{Independent Training}: The tokenizer has its own training set, which may be different from the LLM's training data.
+    \item \textbf{Translation Layer}: Once trained, the tokenizer acts as a translation layer, converting raw text into token sequences for the LLM and vice-versa.
+    \item \textbf{Data Density}: The composition of the tokenizer's training data significantly impacts the "density" of tokenization for different languages or types of text.
+\end{itemize}
+
+\subsection{Encoding and Decoding with a Trained BPE Tokenizer}
+
+Once a tokenizer is trained (i.e., its \texttt{merges} dictionary and \texttt{vocab} mapping are established), it can perform encoding and decoding operations.
+
+\subsubsection{Decoding (Tokens to Text)}
+Given a sequence of integer tokens, the decoder reconstructs the original text.
+
+\begin{lstlisting}[caption={Decoding function}]
+def decode(ids, vocab_map):
+    # Map token IDs back to their byte representations
+    tokens_bytes = [vocab_map[idx] for idx in ids]
+    # Concatenate all byte chunks
+    raw_bytes = b"".join(tokens_bytes)
+    # Decode raw bytes to string. Use errors='replace' for robustness
+    text = raw_bytes.decode('utf-8', errors='replace')
+    return text
+\end{lstlisting}
+
+\subsubsection{Encoding (Text to Tokens)}
+Given a raw string, the encoder converts it into a sequence of integer tokens using the learned merges.
+
+\begin{lstlisting}[caption={Encoding function (simplified)}]
+def encode(text, merges):
+    # Convert text to initial byte tokens
+    tokens = list(text.encode('utf-8')) # Raw UTF-8 bytes as initial tokens
+
+    while True:
+        # Find all possible merge candidates in the current token sequence
+        stats = get_stats(tokens) # Reuses the get_stats function
+
+        # Find the most "eligible" merge: the one with the lowest index in 'merges'
+        pair_to_merge = None
+        min_merge_idx = float('inf') 
+
+        for pair, _ in stats.items(): 
+            if pair in merges: 
+                merge_idx = merges[pair] 
+                if merge_idx < min_merge_idx:
+                    min_merge_idx = merge_idx
+                    pair_to_merge = pair
+
+        if pair_to_merge is None: # No more eligible merges found
+            break
+
+        # Perform the merge
+        new_token_id = merges[pair_to_merge]
+        tokens = merge(tokens, pair_to_merge, new_token_id) 
+
+    return tokens
+\end{lstlisting}
+
+This encoding logic prioritizes merging pairs based on the order they were introduced during training, ensuring consistent encoding.
+
+\subsection{State-of-the-Art Tokenizers}
+
+While the fundamental BPE algorithm remains, real-world tokenizers for LLMs introduce significant complexities and additional rules.
+
+\subsubsection{GPT-2 Tokenizer}
+The GPT-2 paper introduced BPE on the byte-level representation of UTF-8 encoded text, with a vocabulary of 50,257 tokens.
+\begin{itemize}
+    \item \textbf{Regex-based Chunking}: A key departure from naive BPE is the use of a complex regular expression to first split the input text into chunks before applying BPE merges within those chunks.
+    \item \textbf{Enforcing Merge Rules}: This pre-splitting prevents merges across specific boundaries, effectively enforcing rules for what parts of the text will never be merged.
+\end{itemize}
+
+\subsubsection{Tiktoken (GPT-4 Tokenizer)}
+Tiktoken is the official OpenAI library for tokenization, primarily for inference.
+\begin{itemize}
+    \item \textbf{Improved Efficiency}: For the same text, GPT-4's tokenizer can result in roughly half the number of tokens compared to GPT-2, effectively doubling the context an LLM can "see" for the same token budget.
+    \item \textbf{Whitespace Merging}: Unlike GPT-2, the GPT-4 tokenizer does merge sequences of whitespace characters into single tokens, significantly improving efficiency for code.
+\end{itemize}
+
+\subsection{Common Tokenization Issues}
+
+Now with a deeper understanding, we can revisit the common issues LLMs face that fundamentally trace back to tokenization.
+
+\subsubsection{Spelling and Character-Level Tasks}
+\begin{itemize}
+    \item \textbf{Problem}: LLMs often struggle with simple spelling or character-level manipulation tasks.
+    \item \textbf{Reason}: This is because text is chunked into tokens, and often, long common phrases or words become single tokens. The LLM sees this as an atomic unit, making character-level reasoning difficult.
+\end{itemize}
+
+\subsubsection{Non-English Languages Performance}
+\begin{itemize}
+    \item \textbf{Problem}: LLMs, like ChatGPT, often perform worse on non-English languages.
+    \item \textbf{Reason}: While part of this is due to less training data for the LLM itself, a significant factor is the tokenizer. Tokenizers are often predominantly trained on English text, leading to much larger token counts for the same semantic content in other languages.
+\end{itemize}
+
+\subsubsection{Simple Arithmetic Challenges}
+\begin{itemize}
+    \item \textbf{Problem}: LLMs can be surprisingly bad at simple arithmetic.
+    \item \textbf{Reason}: Arithmetic algorithms operate on individual digits. However, numbers are tokenized arbitrarily, preventing the model from consistently applying character-level arithmetic logic.
+\end{itemize}
+
+\subsection{Conclusion and Recommendations}
+
+Tokenization is undeniably a complex, often "annoying," and "irritating" stage in working with LLMs, rife with "foot guns," "sharp edges," and even "security issues". However, understanding it is critical for anyone working deeply with these models.
+
+\subsubsection{Recommendations}
+\begin{itemize}
+    \item \textbf{For Inference}: Whenever possible, it is recommended to reuse the GPT-4 tokenizer and its vocabulary, leveraging the efficiency of libraries like OpenAI's Tiktoken.
+    \item \textbf{For Training Custom Vocabularies}:
+    \begin{itemize}
+        \item \textbf{Byte-Level BPE}: The byte-level BPE approach (as used by Tiktoken/OpenAI) is generally preferred due to its cleaner handling.
+        \item \textbf{SentencePiece (with caution)}: While SentencePiece is efficient and can perform both training and inference, it comes with many settings and potential "foot guns" due to its historical baggage and quirks.
+    \end{itemize}
+\end{itemize}
+
+The pursuit of "tokenization-free" autoregressive sequence modeling remains an exciting but as-yet-unproven frontier, promising to bypass many of these complexities. Until then, a solid grasp of tokenization is a prerequisite for effective LLM development.

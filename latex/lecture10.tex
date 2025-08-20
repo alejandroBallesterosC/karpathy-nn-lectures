@@ -1,0 +1,363 @@
+% ====================================================================
+% LECTURE 10: Reproducing GPT-2 (124M) from Scratch
+% ====================================================================
+
+\section{Lecture 10: Reproducing GPT-2 (124M) from Scratch}
+
+\begin{abstract}
+These lecture notes detail the reproduction of the GPT-2 124 million parameter model, a foundational endeavor in understanding large language models (LLMs). We cover everything from architectural nuances and optimization strategies to advanced performance enhancements and rigorous evaluation. These notes provide a comprehensive learning resource, ensuring a deep grasp of the technical concepts and their practical implementations in PyTorch.
+\end{abstract}
+
+\subsection{Introduction to GPT-2 Reproduction}
+Welcome to this in-depth exploration of how to reproduce the GPT-2 model. This section lays the groundwork, discussing what GPT-2 is, the specific model size we are targeting, and the historical context and resources guiding our reproduction.
+
+\subsubsection{Overview of GPT-2}
+GPT-2 was a landmark release by OpenAI in 2019. It was introduced alongside a descriptive blog post, a detailed research paper, and open-source code on GitHub. When people refer to "GPT-2," they often mean the largest model in a series of GPT-2 models of varying sizes. This 'miniseries' allows for the visualization of "scaling laws," where plotting model size against downstream metrics reveals a consistent trend: as model size increases, performance on these tasks generally improves.
+
+For this reproduction, our focus is on the 124 million parameter version of GPT-2. This particular model comprises 12 Transformer layers and utilizes an embedding dimension of 768 channels.
+
+\subsubsection{Goal of the Reproduction}
+The overarching goal of this exercise is to meticulously rebuild the GPT-2 124M model from the ground up, initiating it with random parameters. Our ambition is to train this model to not just replicate, but to potentially surpass the performance of the original OpenAI-released version. This hands-on process offers invaluable insights into the model's internal workings and the intricacies of its training dynamics.
+
+Historically, reproducing GPT-2 was considered a formidable optimization challenge, especially given the computational constraints and smaller GPUs available five years prior to this lecture. Today, advancements in hardware and software have dramatically reduced this barrier. The model can now be reproduced in approximately an hour on cloud computing resources, incurring a cost of around \$10, while achieving performance on par with the original OpenAI release.
+
+\subsubsection{Reference Materials}
+While OpenAI generously released the pre-trained weights for GPT-2, the accompanying paper lacks comprehensive details regarding the training hyperparameters and specific optimization settings. To fill this informational gap, our reproduction efforts will also draw heavily from the GPT-3 paper. The GPT-3 paper provides a wealth of concrete details on hyperparameters and optimization, and its architecture is quite similar to GPT-2, making it an excellent complementary resource.
+
+The original GPT-2 codebase was implemented in TensorFlow. Given PyTorch's current prevalence and user-friendliness, we opt to utilize the Hugging Face Transformers library. Hugging Face's implementation of GPT-2 is particularly convenient as it has already handled the conversion of weights from TensorFlow to a PyTorch-compatible format, streamlining the loading and experimentation process.
+
+\subsection{Model Architecture}
+GPT-2 fundamentally operates as a decoder-only Transformer. This section details its specific structural adaptations from the seminal "Attention Is All You Need" paper.
+
+\subsubsection{Key Architectural Differences from Original Transformer}
+GPT-2 is a specialized variant of the Transformer model, distinguished by two primary modifications:
+\begin{itemize}
+    \item \textbf{Decoder-Only Design}: Unlike the original Transformer, GPT-2 completely omits the encoder component. Consequently, the cross-attention mechanism, which relied on the encoder's output, is also removed. This design choice makes GPT-2 particularly suited for generative tasks, where it predicts the next token in a sequence based solely on preceding tokens.
+    \item \textbf{Layer Normalization Reshuffling and Addition}:
+    \begin{itemize}
+        \item \textbf{Pre-Normalization}: In GPT-2, the layer normalization operations are strategically placed \textit{before} the multi-layer perceptron (MLP) and attention blocks, rather than after them. This pre-normalization technique is highly desirable from an optimization perspective.
+        \item \textbf{Additional Final Layer Norm}: An extra layer normalization is introduced just prior to the final classifier, or language model head.
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Model Skeleton (GPT NN Module)}
+To ensure compatibility and ease of weight loading from the Hugging Face Transformers library, our GPT model is structured to mirror their schema. Below is a breakdown of its key components:
+
+\begin{itemize}
+    \item \textbf{Main Container}: The core of the model is encapsulated within an \texttt{nn.ModuleDict} named \texttt{transformer}.
+    \item \textbf{Token Embeddings (\texttt{wte})}: An \texttt{nn.Embedding} module handles the token embeddings. The GPT-2 vocabulary contains 50,257 unique tokens. Each token is transformed into a 768-dimensional embedding vector.
+    \item \textbf{Position Embeddings (\texttt{wpe})}: Another \texttt{nn.Embedding} module dedicated to positional information. GPT-2 supports a maximum sequence length of 1024 tokens.
+    \item \textbf{Transformer Blocks (\texttt{h})}: A sequential collection of 12 Transformer blocks managed by an \texttt{nn.ModuleList}.
+    \item \textbf{Final Layer Normalization (\texttt{ln\_f})}: Additional layer normalization introduced by the GPT-2 architecture.
+    \item \textbf{Language Model Head (\texttt{lm\_head})}: The ultimate layer, a linear classifier, projects the 768-dimensional output to the full vocabulary size of 50,257.
+\end{itemize}
+
+\begin{lstlisting}[caption={GPT Model Skeleton}]
+import torch.nn as nn
+
+class GPT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd)
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        # Weight tying (discussed later in Initialization)
+        self.transformer.wte.weight = self.lm_head.weight
+\end{lstlisting}
+
+\subsection{Core Components of a Transformer Block}
+Each \texttt{Block} within the Transformer architecture is a fundamental unit that iteratively refines the representation of tokens within the residual stream. It consists of two primary sub-components: the Multi-Layer Perceptron (MLP) and the Attention mechanism.
+
+\subsubsection{Multi-Layer Perceptron (MLP)}
+The MLP block is a relatively straightforward component, responsible for processing information individually for each token. It comprises two linear projections, with a non-linear activation function, GELU, strategically placed between them.
+
+\begin{itemize}
+    \item \textbf{GELU (Gaussian Error Linear Units)}: GELU serves as the non-linearity within the MLP. It is a smoother activation function compared to the traditional ReLU.
+    \item \textbf{Approximate GELU}: Historically, GPT-2 utilized an approximate version of GELU, specifically the \texttt{tanh} approximation.
+\end{itemize}
+
+\begin{lstlisting}[caption={MLP Block Structure}]
+class MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # First linear projection: expands dimension
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=True)
+        # GELU activation (approximate='tanh' for GPT-2 faithful reproduction)
+        self.gelu = nn.GELU(approximate='tanh')
+        # Second linear projection: projects back to original dimension
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=True)
+
+    def forward(self, x):
+        return self.c_proj(self.gelu(self.c_fc(x)))
+\end{lstlisting}
+
+\subsubsection{Attention Mechanism (Multi-Headed Attention)}
+Attention is the pivotal communication operation within the Transformer, enabling tokens to exchange information and establish relationships based on their relevance.
+
+\begin{itemize}
+    \item \textbf{Query, Key, and Value (QKV) Vectors}: For each token in a sequence, three distinct vectors are generated: a Query (Q), a Key (K), and a Value (V).
+    \item \textbf{Attention Score Calculation}: The core interaction happens when Queries are multiplied with Keys (\texttt{Q @ K.T}).
+    \item \textbf{Autoregressive Masking}: Crucially for generative models like GPT-2, an autoregressive mask is applied to the attention scores.
+    \item \textbf{Softmax Normalization}: Following the attention score calculation, a softmax function is applied.
+    \item \textbf{Weighted Sum with Values}: The normalized attention matrix is then multiplied with the Value vectors.
+\end{itemize}
+
+\begin{lstlisting}[caption={Multi-Headed Attention (Simplified)}]
+import torch.nn.functional as F
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # Combined linear layer for Q, K, V projections
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=True)
+        # Output projection layer
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=True)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.block_size = config.block_size
+
+    def forward(self, x):
+        B, T, C = x.size() # batch size, sequence length, embedding dimension
+        
+        # Compute QKV in one go and split
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        
+        # Reshape for multi-head
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+
+        # Scaled dot-product attention with causal masking
+        att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
+        att = F.softmax(att, dim=-1) # Normalize attention scores
+
+        # Weighted sum of values
+        y = att @ v
+        # Re-assemble heads and project back
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.c_proj(y) # Final projection
+        return y
+\end{lstlisting}
+
+\subsubsection{Transformer Block}
+The \texttt{Block} module encapsulates the combined functionality of the attention mechanism and the MLP within a single Transformer layer.
+
+\begin{lstlisting}[caption={Transformer Block Structure}]
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # LayerNorm before the attention block (pre-normalization)
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        # Self-attention module
+        self.attn = CausalSelfAttention(config)
+
+        # LayerNorm before the MLP block (pre-normalization)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        # MLP module
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        # Residual connection around attention with pre-normalization
+        x = x + self.attn(self.ln_1(x))
+        # Residual connection around MLP with pre-normalization
+        x = x + self.mlp(self.ln_2(x))
+        return x
+\end{lstlisting}
+
+\subsection{Initialization Strategy}
+The way a neural network's weights are initialized plays a critical role in its ability to converge during training. This section outlines the specific initialization strategies employed for GPT-2, focusing on weight tying and the precise parameter settings.
+
+\subsubsection{Weight Tying}
+GPT-2 incorporates a well-established weight tying scheme, a technique that has been shown to be effective in neural network architectures.
+
+\begin{itemize}
+    \item \textbf{Concept}: At its core, weight tying means that the same weight matrix is shared between two distinct parts of the model: the token embedding layer at the input and the final language modeling head at the output.
+    \item \textbf{Motivation}: The rationale behind this sharing stems from an intuitive symmetry. If two tokens are semantically similar, one would expect their input embeddings to be close in the embedding space.
+    \item \textbf{Benefits}: This scheme offers significant practical advantages. It substantially reduces the total number of parameters in the model.
+\end{itemize}
+
+\begin{lstlisting}[caption={Weight Tying Implementation}]
+# This line is crucial and typically placed in the GPT.__init__ method
+# It makes the weight matrix of the token embedding layer (wte)
+# share the same underlying data storage as the weight matrix
+# of the final language model head (lm_head).
+self.transformer.wte.weight = self.lm_head.weight
+\end{lstlisting}
+
+\subsubsection{Weight Initialization Parameters}
+Beyond weight tying, the specific numerical values used to initialize the weights play a vital role. Our approach mirrors the initialization parameters observed directly from OpenAI's original GPT-2 TensorFlow code:
+
+\begin{itemize}
+    \item \textbf{Linear Layer Weights}: All weights in linear layers are initialized from a normal distribution with a mean of 0.0 and a standard deviation of 0.02.
+    \item \textbf{Biases}: All bias terms in linear layers are explicitly initialized to zero.
+    \item \textbf{Embedding Tables}: Both the token embedding table and the position embedding table are initialized from a normal distribution with a mean of 0.0 and a standard deviation of 0.02.
+    \item \textbf{Residual Layer Scaling}: A crucial detail from the GPT-2 paper is the scaling of weights in the projection layers that contribute to the residual pathway.
+\end{itemize}
+
+\begin{lstlisting}[caption={Custom Weight Initialization}]
+def _init_weights(self, module):
+    # Initialize nn.Linear layers
+    if isinstance(module, nn.Linear):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    # Initialize nn.Embedding layers
+    elif isinstance(module, nn.Embedding):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    # GPT-2 specific: scale residual projections
+    if isinstance(module, Block):
+        # Scale c_proj weights in Attention block
+        scale = 0.02 / (2 * self.config.n_layer)**0.5
+        nn.init.normal_(module.attn.c_proj.weight, mean=0.0, std=scale)
+        # Scale c_proj weights in MLP block
+        nn.init.normal_(module.mlp.c_proj.weight, mean=0.0, std=scale)
+\end{lstlisting}
+
+\subsection{Data Loading and Preprocessing}
+Efficient data loading and preprocessing are paramount for successful training of large language models. This section covers the datasets used, along with the strategies for tokenization and batching.
+
+\subsubsection{Datasets}
+Our reproduction effort employs two primary datasets:
+\begin{itemize}
+    \item \textbf{Tiny Shakespeare}: This is a compact, ASCII-only dataset, approximately 1 million characters or 338,000 tokens. It serves as an initial, manageable dataset primarily for debugging purposes.
+    \item \textbf{FineWeb-Edu}: For serious pre-training, we transition to FineWeb-Edu, a significantly larger and higher-quality dataset. This dataset is meticulously filtered educational content derived from the Common Crawl corpus.
+\end{itemize}
+
+\subsubsection{Tokenization and Batching}
+\begin{itemize}
+    \item \textbf{Tiktoken}: The \texttt{tiktoken} library, developed by OpenAI, is the chosen tool for tokenization, specifically using the GPT-2 encoding.
+    \item \textbf{Vocabulary Size}: The GPT-2 model operates with a vocabulary size of 50,257 tokens. This includes 50,000 Byte Pair Encoding (BPE) merges, 256 byte tokens, and a distinct special "end-of-text" (EOS) token.
+    \item \textbf{Batching Strategy}: Raw sequences of tokens are transformed into a two-dimensional tensor with dimensions \texttt{(B, T)}. Here, \texttt{B} denotes the batch size, and \texttt{T} represents the sequence length.
+    \item \textbf{Data Sharding}: For managing large datasets like FineWeb-Edu, the data is pre-processed and partitioned into smaller NumPy \texttt{.npy} files, known as "shards."
+\end{itemize}
+
+\begin{lstlisting}[caption={Data Loader (Simplified)}]
+import tiktoken
+import numpy as np
+import torch
+import os
+
+class DataLoaderLite:
+    def __init__(self, B, T, process_rank, num_processes, split):
+        self.B = B # Batch size
+        self.T = T # Sequence length
+        self.process_rank = process_rank # Current DDP rank
+        self.num_processes = num_processes # Total DDP processes
+        assert split in {'train', 'val'}
+
+        # Load data based on split and rank for distributed loading
+        enc = tiktoken.get_encoding("gpt2")
+        
+        # Load shard (simplified for brevity)
+        shard_path = f"data/fine_web_edu/{split}_0000_10B.npy"
+        self.tokens = np.load(shard_path).astype(np.uint16)
+        
+        self.current_position = self.B * self.T * self.process_rank
+        self.max_position = len(self.tokens)
+
+    def next_batch(self):
+        # Extract a buffer of tokens for the current batch
+        buf = self.tokens[self.current_position : self.current_position + self.B * self.T + 1]
+        
+        # Form input (X) and target (Y) tensors
+        x = buf[:-1].reshape(self.B, self.T)
+        y = buf[1:].reshape(self.B, self.T)
+
+        # Advance position for the next batch
+        self.current_position += self.B * self.T * self.num_processes
+
+        # Convert to PyTorch tensors and return
+        return torch.from_numpy(x), torch.from_numpy(y)
+\end{lstlisting}
+
+\subsection{Training Loop Setup}
+The training loop is the orchestrator of the entire optimization process. This section details the optimizer configuration, learning rate scheduling, and gradient clipping mechanisms essential for effective and stable training.
+
+\subsubsection{Optimizer and Hyperparameters}
+The AdamW optimizer is a robust choice for training large language models due to its efficiency and effectiveness compared to simpler optimizers like Stochastic Gradient Descent (SGD).
+
+\begin{itemize}
+    \item \textbf{AdamW Optimizer}: This is an advanced optimization algorithm that generally converges faster than SGD, particularly beneficial for language models.
+    \item \textbf{Beta Parameters}: The betas, which control the exponential moving averages of gradients and squared gradients, are set to (0.9, 0.95).
+    \item \textbf{Learning Rate}: The maximum learning rate is set to 6e-4.
+    \item \textbf{Weight Decay}: A weight decay of 0.1 is applied as a regularization technique.
+\end{itemize}
+
+\begin{lstlisting}[caption={Optimizer Configuration}]
+import torch.optim as optim
+
+def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    # Collect all parameters and separate them into two groups
+    param_dict = {pn: p for pn, p in self.named_parameters()}
+    
+    # Parameters for which weight decay will be applied
+    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2 and 'bias' not in n]
+    
+    # Parameters for which weight decay will NOT be applied
+    no_decay_params = [p for n, p in param_dict.items() if p.dim() < 2 or 'bias' in n]
+    
+    optim_groups = [
+        {'params': decay_params, 'weight_decay': weight_decay},
+        {'params': no_decay_params, 'weight_decay': 0.0}
+    ]
+    
+    # Initialize AdamW optimizer
+    optimizer = optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+    
+    return optimizer
+\end{lstlisting}
+
+\subsection{Performance Optimizations}
+Achieving efficient training for large language models necessitates a suite of performance optimizations. This section explores techniques that leverage specialized hardware, minimize overhead, and manage memory effectively.
+
+\subsubsection{Mixed Precision Training (TF32 and BFloat16)}
+Mixed precision training is a powerful technique that involves performing operations with different numerical precisions to accelerate training and reduce memory footprint, especially on GPUs with specialized Tensor Cores.
+
+\begin{itemize}
+    \item \textbf{TF32 (Tensor Float 32)}: TF32 is an internal precision format supported by Nvidia's Ampere architecture. It can provide up to an 8x speedup for matrix multiplications.
+    \item \textbf{BFloat16 (BF16)}: BF16 is a 16-bit floating-point format designed to maintain the full exponent range of standard FP32 while reducing the precision of the mantissa.
+\end{itemize}
+
+\subsubsection{torch.compile (Kernel Fusion)}
+\texttt{torch.compile} is a relatively newer, incredibly powerful feature in PyTorch that acts as a just-in-time compiler for neural networks.
+
+\subsubsection{FlashAttention-2}
+FlashAttention is an innovative algorithmic rewrite of the standard attention mechanism, specifically designed to be highly memory-aware and to significantly accelerate attention computation.
+
+\subsubsection{Distributed Data Parallel (DDP)}
+Distributed Data Parallel (DDP) is PyTorch's primary and highly recommended mechanism for scaling training across multiple GPUs.
+
+\subsection{Evaluation and Results}
+Beyond the core training process, effective evaluation and robust logging are essential for monitoring progress, identifying issues, and comparing performance against benchmarks.
+
+\subsubsection{Validation Loss}
+Regular evaluation on a dedicated validation split of the dataset is a standard practice during training. This is critical for assessing the model's generalization ability and detecting overfitting.
+
+\subsubsection{HellaSwag Evaluation}
+HellaSwag is a prominent benchmark for evaluating commonsense reasoning in language models. It's a sentence completion task where models must select the most natural continuation from several options.
+
+\subsubsection{Results and Discussion}
+The reproduction of GPT-2 (124M) demonstrated encouraging results:
+\begin{itemize}
+    \item \textbf{Loss Convergence}: The validation loss achieved by our reproduced model successfully surpassed that of the original OpenAI GPT-2 124M model.
+    \item \textbf{HellaSwag Accuracy}: The HellaSwag accuracy of our model exceeded the original GPT-2 124M's score.
+    \item \textbf{Efficiency Gains}: A remarkable finding is that our reproduction achieved comparable or even superior results using substantially fewer training tokens.
+\end{itemize}
+
+\subsection{Further Exploration}
+The journey of reproducing GPT-2 opens doors to more advanced topics and projects in large language model development.
+
+\begin{itemize}
+    \item \textbf{\texttt{llm.c}}: This project represents a highly optimized, pure CUDA implementation of GPT-2/GPT-3 training.
+    \item \textbf{Fine-tuning (SFT)}: The pre-trained GPT model can be transformed into a conversational agent through supervised fine-tuning.
+\end{itemize}
+
+This concludes our comprehensive lecture notes on reproducing GPT-2. The process of building from scratch and optimizing such a model provides invaluable insights into the intricacies of modern large language model training.

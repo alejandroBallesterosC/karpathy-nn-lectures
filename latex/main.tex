@@ -13,6 +13,7 @@
 
 % Code listing packages
 \usepackage{listings}       % Code listings
+\usepackage{fancyvrb}       % Enhanced verbatim environments
 \usepackage{xcolor}         % Enhanced color support
 
 % Document layout and formatting
@@ -21,7 +22,10 @@
 \usepackage{titlesec}       % Section title formatting
 \usepackage{tocloft}        % Table of contents formatting
 \usepackage{enumitem}       % Enhanced list formatting
-\usepackage{xcolor}         % Color support
+\usepackage{microtype}      % Improved typography and spacing
+\usepackage{parskip}        % Better paragraph spacing
+\usepackage{booktabs}       % Professional tables
+\usepackage{caption}        % Enhanced captions
 
 % Hyperlinks (load last to avoid conflicts)
 \usepackage{hyperref}       % PDF hyperlinks and bookmarks
@@ -50,77 +54,124 @@
   literate={-}{-}{1} {+}{+}{1} {*}{\textasteriskcentered}{1} {=}{=}{1} {/}{\slash}{1}
 }
 
-% Listing style configuration
+% Enhanced listing style configuration for elegance and readability
 \lstset{
-  language=Python,
   basicstyle=\ttfamily\small,
   breaklines=true,
   frame=single,
-  frameround=ffff,
+  frameround=tttt,
+  framesep=8pt,
+  rulecolor=\color{blue!20!black},
+  backgroundcolor=\color{blue!2!white},
   numbers=left,
-  numberstyle=\tiny\color{gray},
+  numberstyle=\tiny\color{gray!60!black},
+  stepnumber=1,
+  numbersep=8pt,
   showspaces=false,
   showtabs=false,
   tabsize=2,
   captionpos=b,
-  xleftmargin=0.5cm,
-  xrightmargin=0.5cm,
-  aboveskip=1em,
-  belowskip=1em,
-  commentstyle=\color{gray},
-  stringstyle=\color{red},
-  keywordstyle=\color{blue},
-  identifierstyle=\color{black},
-  numberbychapter=false
+  xleftmargin=0.8cm,
+  xrightmargin=0.4cm,
+  aboveskip=1.2em,
+  belowskip=1.2em,
+  numberbychapter=false,
+  columns=flexible,
+  keepspaces=true,
+  showstringspaces=false,
+  commentstyle=\color{green!60!black}\itshape,
+  keywordstyle=\color{blue!80!black}\bfseries,
+  stringstyle=\color{red!70!black},
+  identifierstyle=\color{black}
 }
 
-% Page setup
+% Enhanced page setup for optimal readability
 \geometry{
     a4paper,
-    left=1.2in,
-    right=1.2in,
-    top=1.2in,
-    bottom=1.2in,
-    headheight=14pt
+    left=1.1in,
+    right=1.1in,
+    top=1.3in,
+    bottom=1.3in,
+    headheight=16pt,
+    headsep=0.3in,
+    footskip=0.4in,
+    marginparwidth=0.8in,
+    marginparsep=0.1in
 }
 
-% Header and footer styling
+% Enhanced header and footer styling
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\textit{Neural Networks and Deep Learning}}
-\fancyhead[R]{\textit{Karpathy Lectures}}
-\fancyfoot[C]{\thepage}
-\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\textit{\color{blue!70!black}Neural Networks and Deep Learning}}
+\fancyhead[R]{\small\textit{\color{blue!70!black}Karpathy Lecture Series}}
+\fancyfoot[C]{\small\textbf{\color{blue!60!black}\thepage}}
+\renewcommand{\headrulewidth}{0.5pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{blue!30!black}\leaders\hrule height \headrulewidth\hfill}}
 \renewcommand{\footrulewidth}{0pt}
 
-% Section styling
+% Enhanced section styling with better spacing and aesthetics
 \titleformat{\section}
-{\Large\bfseries\color{blue!70!black}}
+{\LARGE\bfseries\color{blue!80!black}}
 {\thesection}
 {1em}
 {}
+[\vspace{0.5em}\titlerule[0.8pt]\vspace{0.3em}]
 
 \titleformat{\subsection}
-{\large\bfseries\color{blue!60!black}}
+{\Large\bfseries\color{blue!70!black}}
 {\thesubsection}
 {1em}
 {}
+[\vspace{0.2em}]
 
 \titleformat{\subsubsection}
-{\normalsize\bfseries\color{blue!50!black}}
+{\large\bfseries\color{blue!60!black}}
 {\thesubsubsection}
 {1em}
 {}
 
-% Enhanced list formatting
-\setlist[enumerate]{itemsep=2pt, parsep=2pt}
-\setlist[itemize]{itemsep=2pt, parsep=2pt}
+\titleformat{\paragraph}
+{\normalsize\bfseries\color{blue!50!black}}
+{\theparagraph}
+{1em}
+{}
 
-% Theorem environments
+% Enhanced list formatting with better spacing
+\setlist[enumerate]{itemsep=3pt, parsep=3pt, leftmargin=1.2em}
+\setlist[itemize]{itemsep=3pt, parsep=3pt, leftmargin=1.2em}
+
+% Enhanced caption formatting
+\captionsetup{
+    font={small,it},
+    labelfont={bf,color=blue!70!black},
+    textfont={color=black},
+    margin=1cm,
+    skip=8pt
+}
+
+% Enhanced theorem and abstract environments
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[section]
 \newtheorem{theorem}{Theorem}[section]
 \newtheorem{example}{Example}[section]
+
+% Enhanced abstract environment
+\renewenvironment{abstract}
+{
+    \begin{center}
+    \begin{minipage}{0.9\textwidth}
+    \small
+    \begin{center}
+    \textbf{\color{blue!70!black}Abstract}
+    \end{center}
+    \vspace{0.3em}
+    \itshape\color{black!80!white}
+}
+{
+    \end{minipage}
+    \end{center}
+    \vspace{1em}
+}
 
 % ====================================================================
 % CUSTOM COMMANDS - Semantic mathematical notation
@@ -150,19 +201,20 @@
     bookmarksdepth=3
 }
 
-% Title page information
+% Enhanced title page information
 \title{
-    \vspace{-1in}
-    \huge\textbf{Neural Networks and Deep Learning}\\
-    \Large\textbf{Lecture Notes}\\
-    \vspace{0.5cm}
-    \large Based on Andrej Karpathy's Lectures
+    \vspace{-0.8in}
+    \Huge\textbf{\color{blue!80!black}Neural Networks and Deep Learning}\\[0.3cm]
+    \LARGE\textbf{\color{blue!60!black}Complete Lecture Notes}\\[0.5cm]
+    \large\textit{Based on Andrej Karpathy's Comprehensive Lecture Series}\\[0.2cm]
+    \normalsize\textit{From Micrograd to GPT-2: Building Neural Networks from Scratch}
 }
 \author{
-    \large Andrej Karpathy\\
-    \normalsize OpenAI / Tesla
+    \Large\textbf{Andrej Karpathy}\\[0.2cm]
+    \large\textit{OpenAI / Tesla}\\[0.1cm]
+    \normalsize Co-founder of OpenAI, Former Director of AI at Tesla
 }
-\date{\large\today}
+\date{\Large\today}
 
 \begin{document}
 
@@ -173,17 +225,44 @@
 \vfill
 \begin{center}
 \large
-These notes are based on Andrej Karpathy's lectures on neural networks\\
-and deep learning fundamentals.\\
-\vspace{0.5cm}
-\textit{``The goal is to build a strong foundation in neural networks\\
-by implementing everything from scratch and understanding the math.''}
+\textbf{\color{blue!70!black}Complete Course Coverage}\\[0.4cm]
+\normalsize
+These comprehensive notes cover Andrej Karpathy's complete lecture series\\
+on neural networks and deep learning fundamentals.\\[0.6cm]
+
+\begin{minipage}{0.8\textwidth}
+\centering
+\textit{\color{blue!60!black}``The goal is to build a strong foundation in neural networks\\
+by implementing everything from scratch and understanding the math.\\
+We'll go from the simplest perceptron to modern transformers like GPT-2.''}\\[0.4cm]
+\textbf{--- Andrej Karpathy}
+\end{minipage}\\[0.8cm]
+
+\textbf{\color{blue!70!black}Complete Course Curriculum:}\\[0.3cm]
+\begin{minipage}{0.95\textwidth}
+\small
+\textbf{Lectures 1-2:} Automatic differentiation and backpropagation from first principles\\
+\textbf{Lectures 3-4:} Multi-layer perceptrons and activation functions\\
+\textbf{Lectures 5-6:} Advanced neural network architectures and batch normalization\\
+\textbf{Lectures 7-8:} Transformer fundamentals and attention mechanisms\\
+\textbf{Lecture 9:} Tokenization and the GPT tokenizer deep dive\\
+\textbf{Lecture 10:} Reproducing GPT-2 from scratch with modern techniques\\[0.3cm]
+\textit{From basic neurons to state-of-the-art language models}
+\end{minipage}
 \end{center}
 \vfill
 
 \newpage
 
-% Table of Contents
+% Enhanced Table of Contents
+\renewcommand{\contentsname}{\LARGE\textbf{\color{blue!80!black}Table of Contents}}
+\setlength{\cftbeforesecskip}{0.8em}
+\setlength{\cftbeforesubsecskip}{0.4em}
+\renewcommand{\cftsecfont}{\bfseries\color{blue!70!black}}
+\renewcommand{\cftsecpagefont}{\bfseries\color{blue!70!black}}
+\renewcommand{\cftsubsecfont}{\color{blue!60!black}}
+\renewcommand{\cftsubsecpagefont}{\color{blue!60!black}}
+
 \tableofcontents
 \newpage
 
@@ -196,6 +275,8 @@ by implementing everything from scratch and understanding the math.''}
 \input{lecture6}
 \input{lecture7}
 \input{lecture8}
+\input{lecture9}
+\input{lecture10}
 % \input{problemset_1}
 
 \end{document}
